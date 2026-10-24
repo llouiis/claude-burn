@@ -1,0 +1,15 @@
+{
+  "name": "claude-nutzung",
+  "description": "Clawd-Nutzungsleiste für Claude Code",
+  "owner": {
+    "name": "Louis",
+    "url": "https://github.com/llouiis"
+  },
+  "plugins": [
+    {
+      "name": "nutzung",
+      "source": "./",
+      "description": "Dezente Leiste über dem Eingabefeld mit den Nutzungslimits wie /usage, per Klick durchschaltbar; Clawd in einer ausgelosten Rolle (Stausee, Feuer, Garten, Regen, Angler, Bäcker, Astronaut)"
+    }
+  ]
+}

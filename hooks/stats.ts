@@ -53,9 +53,16 @@ const DAY = 86_400_000
 export const dayNumber = (date: string) => Math.floor(Date.parse(`${date.slice(0, 10)}T00:00:00Z`) / DAY)
 export const dateOf = (day: number) => new Date(day * DAY).toISOString().slice(0, 10)
 
-// claude-opus-5-5 → Opus 5.5
+// claude-opus-5-5 → Opus 5.5. Ein Datum am Ende (-20251001) und ein Zusatz wie [1m]
+// fallen weg, ältere IDs mit der Version vorn (claude-3-5-sonnet) lesen sich genauso.
 export function modelName(id: string): string {
-  const [family = id, ...version] = id.replace(/^claude-/, '').split('-')
+  const parts = id
+    .replace(/^claude-/, '')
+    .replace(/\[.*\]$/, '')
+    .split('-')
+    .filter(part => !/^\d{8}$/.test(part))
+  const family = parts.find(part => /^[a-z]/i.test(part)) ?? parts[0] ?? id
+  const version = parts.filter(part => part !== family)
 
   return `${family.charAt(0).toUpperCase()}${family.slice(1)} ${version.join('.')}`.trim()
 }

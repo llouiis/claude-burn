@@ -22,6 +22,7 @@ import {
   SCENE_SVG,
   SLOT,
   arrivalLength,
+  isRestingAt,
   sceneAlt,
   sceneSvg,
   sizeLevel,
@@ -73,6 +74,7 @@ const streaming = new Map<string, number>()
 let inFlight = 0
 let behind = 0
 let published = ''
+let streamedNow = 0
 // Solange eine fertige Antwort ins Kassenbuch geht, wartet der Takt mit dem Schreiben.
 let isSettling = false
 let ticker: { cancel: () => void } | undefined
@@ -85,12 +87,23 @@ const DRIP = 150
 // Ab so vielen Tokens pro Sekunde (geschätzt wie der Spinner, über RATE_WINDOW) eine Stufe mehr.
 const FLOW_AT = [40, 100, 200]
 const RATE_WINDOW = 2_000
+// Hinauf geht es sofort, hinunter erst unter 70 % der Schwelle (Hysterese), eine Stufe auf einmal
+// und frühestens nach FLOW_HOLD: so flackert der Strahl nicht zwischen zwei Stufen hin und her,
+// und am Ende klingt er über die schwächeren Stufen ab, statt abzubrechen.
+const FLOW_DOWN = 0.7
+const FLOW_HOLD = 300
 let rateSamples: { at: number; amount: number }[] = []
-let flowNow = 0
+// -1 zugedreht, sonst die Stufe 0 bis 3 wie FLOWS.
+let flowNow = -1
+let flowSince = 0
+// Der Strom ist zu Ende, das Wasser läuft noch aus: der Strahl wird schwächer, der letzte
+// Tropfen fällt, dann erst ist der Hahn zu.
+let isDraining = false
 // Unter dieser Breite fällt Clawd weg, bevor Zahlen oder Zeitraum gekürzt werden.
 const TAP_MIN_COLUMNS = 80
 const drip = atom({ plugin: 'nutzung', key: 'drip' } as const, 0)
-const flow = atom({ plugin: 'nutzung', key: 'flow' } as const, 0)
+// -1 zugedreht, sonst die Stufe wie flowNow; Wasser zeigt die Szene nur, solange es läuft.
+const flow = atom({ plugin: 'nutzung', key: 'flow' } as const, -1)
 let dripper: { cancel: () => void } | undefined
 // Die Rolle, einmal pro Sitzung ausgelost; /clawd wechselt sie von Hand.
 const role = atom({ plugin: 'nutzung', key: 'role' } as const, 0)
@@ -211,19 +224,20 @@ function berlin(ms: number): Date {
   return new Date(ms + (isSummer ? 2 : 1) * HOUR)
 }
 
-// 24, 13.7k, 10.1m, 1.5b: Zahlen wie in /usage.
+// 24, 13.7k, 10.1m, 1.5b: Zahlen wie in /usage. Die Schwellen liegen dort, wo die
+// kleinere Einheit schon auf 1000 runden würde: 999_960 heißt 1.0m, nicht 1000.0k.
 function count(n: number): string {
-  if (n >= 1e9) return `${(n / 1e9).toFixed(1)}b`
-  if (n >= 1e6) return `${(n / 1e6).toFixed(1)}m`
-  if (n >= 1e3) return `${(n / 1e3).toFixed(1)}k`
+  if (n >= 999_950_000) return `${(n / 1e9).toFixed(1)}b`
+  if (n >= 999_950) return `${(n / 1e6).toFixed(1)}m`
+  if (n >= 999.5) return `${(n / 1e3).toFixed(1)}k`
 
   return String(Math.round(n))
 }
 
 // Rechts in der Leiste genauer, damit man das Hochzählen auch bei Millionen sieht: 1.234m.
 function liveCount(n: number): string {
-  if (n >= 1e9) return `${(n / 1e9).toFixed(3)}b`
-  if (n >= 1e6) return `${(n / 1e6).toFixed(3)}m`
+  if (n >= 999_999_500) return `${(n / 1e9).toFixed(3)}b`
+  if (n >= 999_950) return `${(n / 1e6).toFixed(3)}m`
 
   return count(n)
 }
@@ -253,31 +267,42 @@ async function publish($: EngineInterface, force = false) {
   const shown = `${inFlight > 0 ? '↓' : ''}${liveCount(Math.max(0, totals[span.key] + inFlight - behind))}`
   if (shown === published && !force) return
   published = shown
-  await update($, streamed, () => inFlight)
+  // Jeder Schreibvorgang zeichnet die Leiste neu: den Strom nur, wenn er sich geändert hat.
+  if (inFlight !== streamedNow) {
+    streamedNow = inFlight
+    await update($, streamed, () => inFlight)
+  }
   await update($, lag, () => behind)
 }
 
-// Dreht den Hahn auf, solange etwas streamt, und wieder zu; still zeichnet er nichts neu.
-// Nach einer langen Pause kommt Clawd zuerst wieder angefahren.
+// Dreht den Hahn auf, solange etwas streamt; danach läuft das Wasser aus (siehe flowTick),
+// still zeichnet er nichts neu. Nach einer langen Pause kommt Clawd zuerst wieder angefahren.
 async function tap($: EngineInterface) {
   const at = await $.clock.now()
   if (inFlight > 0) {
     if (dripper === undefined && at - lastActive >= PAUSE) await arrive($)
     lastActive = at
     stopKindling()
+    // Kommt gleich der nächste Strom, läuft das Wasser einfach weiter, ohne neu anzusetzen.
+    isDraining = false
     if (dripper !== undefined) return
-    await update($, drip, () => 0)
-    await measureFlow($)
+    await setFlow($, flowFor(rateAt(at), -1, 0), at)
     dripper = $.clock.every(DRIP, () => void flowTick($).catch(() => undefined))
     return
   }
   rateSamples = []
   if (dripper === undefined) return
   lastActive = at
-  dripper.cancel()
+  isDraining = true
+}
+
+// Dreht den Hahn ganz zu; in der Pause lodert dann das Feuer wieder auf.
+async function closeTap($: EngineInterface) {
+  dripper?.cancel()
   dripper = undefined
-  flowNow = 0
-  await update($, flow, () => 0)
+  isDraining = false
+  flowNow = -1
+  await update($, flow, () => -1)
   await update($, drip, () => 0)
   kindle($)
 }
@@ -298,9 +323,12 @@ async function arrive($: EngineInterface) {
   })
 }
 
-async function setHeat($: EngineInterface, value: number) {
+// Die Leiste zeigt vom Feuer nur die Stufe: geschrieben wird erst, wenn sie wechselt,
+// nicht bei jedem Takt, in dem die Hitze ein Stück sinkt oder steigt.
+async function setHeat($: EngineInterface, value: number, force = false) {
+  const before = stageOf(heatNow)
   heatNow = Math.max(0, Math.min(HEAT_FULL, value))
-  await update($, heat, () => heatNow)
+  if (force || stageOf(heatNow) !== before) await update($, heat, () => heatNow)
 }
 
 // In der Pause lodert das Feuer jede Sekunde ein Stück auf, bis es wieder voll brennt.
@@ -324,7 +352,7 @@ async function cast($: EngineInterface, index: number) {
   roleNow = index
   await update($, role, () => index)
   stopKindling()
-  await setHeat($, HEAT_FULL)
+  await setHeat($, HEAT_FULL, true)
   await arrive($)
 }
 
@@ -335,22 +363,57 @@ async function sampleRate($: EngineInterface, amount: number) {
   await measureFlow($)
 }
 
-// Tokens pro Sekunde über die letzten zwei Sekunden; schreibt nur, wenn die Stufe wechselt.
-async function measureFlow($: EngineInterface) {
-  const at = await $.clock.now()
+// Tokens pro Sekunde über die letzten zwei Sekunden.
+function rateAt(at: number) {
   rateSamples = rateSamples.filter(sample => sample.at > at - RATE_WINDOW)
-  const rate = rateSamples.reduce((sum, sample) => sum + sample.amount, 0) / (RATE_WINDOW / 1000)
-  const next = FLOW_AT.filter(limit => rate >= limit).length
-  if (next === flowNow) return
+
+  return rateSamples.reduce((sum, sample) => sum + sample.amount, 0) / (RATE_WINDOW / 1000)
+}
+
+// Die Stufe zu dieser Rate: hinauf sofort bis zur passenden, hinunter mit Hysterese, eine Stufe
+// auf einmal und erst, wenn die jetzige FLOW_HOLD lang stand.
+function flowFor(rate: number, current: number, heldFor: number) {
+  const target = FLOW_AT.filter(limit => rate >= limit).length
+  if (current < 0 || target >= current) return target
+  const isBelow = rate < (FLOW_AT[current - 1] ?? 0) * FLOW_DOWN
+
+  return isBelow && heldFor >= FLOW_HOLD ? current - 1 : current
+}
+
+// Neue Stufe: die Bildfolge beginnt von vorn, damit kein Tropfen mitten in der Luft auftaucht.
+async function setFlow($: EngineInterface, next: number, at: number) {
   flowNow = next
+  flowSince = at
   await update($, flow, () => next)
+  await update($, drip, () => 0)
+}
+
+// Schreibt nur, wenn die Stufe wechselt; zugedreht ändert sie sich nicht.
+async function measureFlow($: EngineInterface) {
+  if (dripper === undefined) return
+  const at = await $.clock.now()
+  const next = flowFor(rateAt(at), flowNow, at - flowSince)
+  if (next !== flowNow) await setFlow($, next, at)
 }
 
 async function flowTick($: EngineInterface) {
+  const before = flowNow
   await measureFlow($)
+  // Während der Anfahrt bleibt das Wasser verborgen: dann auch kein Bild weiter, das niemand sieht.
+  if (arrivalNow >= 0) {
+    if (isDraining) await closeTap($)
+    return
+  }
   // Gelöscht wird erst, wenn Clawd angekommen ist, und je stärker der Strahl, desto schneller.
-  if (ROLES[roleNow] === 'fire' && arrivalNow < 0 && heatNow > 0) {
+  if (ROLES[roleNow] === 'fire' && heatNow > 0) {
     await setHeat($, heatNow - (EXTINGUISH[flowNow] ?? 0))
+  }
+  if (flowNow !== before) return
+  // Ausgelaufen: der letzte Tropfen ist aufgeschlagen.
+  const tick = await read($, drip)
+  if (isDraining && flowNow === 0 && (isRestingAt(tick) || isRestingAt(tick + 1))) {
+    await closeTap($)
+    return
   }
   await update($, drip, i => i + 1)
 }
@@ -469,8 +532,9 @@ function views(current: Reading, totals: TokenTotals, nowMs: number, ctx: Contex
   }
   if (current.contextPercent !== null) {
     const used = current.contextTokens
+    // Balken und Zahl zeigen das Kontextfenster: so heißt die Ansicht auch, wie der Reiter im Fenster.
     list.push({
-      label: 'Tokens',
+      label: 'Context',
       percent: current.contextPercent,
       amount:
         used === null
@@ -629,11 +693,11 @@ export const register: Register = on => {
     })
     await $.command.register({
       name: 'tokenstats',
-      description: 'Open usage and stats: limits, heatmap, tokens per model',
+      description: 'Open Usage, Stats and Context: limits, heatmap, tokens per model, context window',
     })
     await $.command.register({
       name: 'clawd',
-      description: "Change Clawd's job in the usage bar: reservoir, fire, garden or rain",
+      description: "Change Clawd's job in the usage bar; /clawd <job> picks one, e.g. garden or astronaut",
     })
 
     const usage = await $.session.usage()
@@ -646,15 +710,17 @@ export const register: Register = on => {
     inFlight = 0
     dripper?.cancel()
     dripper = undefined
+    isDraining = false
     rateSamples = []
-    flowNow = 0
-    await update($, flow, () => 0)
+    flowNow = -1
+    await update($, flow, () => -1)
     await update($, drip, () => 0)
     // Einmal pro Sitzung ausgelost; Clawd kommt gleich angefahren.
     lastActive = at
     await cast($, Math.floor(Math.random() * ROLES.length) % ROLES.length)
     behind = 0
     published = ''
+    streamedNow = 0
     await update($, lag, () => 0)
     await update($, streamed, () => 0)
     await refreshTheme($)
@@ -889,10 +955,11 @@ export const register: Register = on => {
       const liveTokens = await read($, live)
       const liveMoney = await read($, liveCost)
       // Die Spaltenflucht bei 23 wie /usage; was im schmalen Fenster nicht passt, rückt
-      // unter die Beschriftung, statt in Spalte 0 umzubrechen.
+      // unter die Beschriftung, statt in Spalte 0 umzubrechen. `mono`, damit die Flucht
+      // auch in den Apps hält; das Terminal ist ohnehin monospaced.
       const line = (label: string, value: string, narrow?: string[]) =>
         columns >= 64 || (narrow === undefined && 23 + value.length <= columns) ? (
-          <Text tabular>{nb(`${label.padEnd(23)}${value}`)}</Text>
+          <Text mono tabular>{nb(`${label.padEnd(23)}${value}`)}</Text>
         ) : (
           <Box flexDirection="column">
             <Text>{nb(label)}</Text>
@@ -914,7 +981,7 @@ export const register: Register = on => {
           {header}
           {blank}
           {line('Total cost:', `$${Math.max(liveMoney.session, current?.costUsd ?? 0).toFixed(4)}`)}
-          {line('Total duration (wall):', since > 0 ? duration(nowMs - since) : '0s')}
+          {line('Total duration (wall):', duration(since > 0 ? nowMs - since : 0))}
           {line(
             'Usage:',
             `${count(totals.input)} input, ${count(totals.output)} output, ${count(totals.cacheRead)} cache read, ${count(totals.cacheWrite)} cache write`,
@@ -966,8 +1033,9 @@ export const register: Register = on => {
           {blank}
           {/* Extra: Tokens und Kosten je Zeitraum, dieselben Zahlen wie rechts in der Leiste. */}
           <Text>{nb('Tokens & cost')}</Text>
+          {/* Spalten aus Leerzeichen: `mono` hält sie auch in den Apps untereinander. */}
           {SPANS.map(span => (
-            <Text>
+            <Text mono>
               <Text>{nb(`  ${(span.label === 'all time' ? 'All time' : span.label === 'session' ? 'Session' : span.label).padEnd(11)}`)}</Text>
               <Text color="claude" tabular>{nb(count(liveTokens[span.key]).padStart(7))}</Text>
               <Text dimColor>{nb(' tokens   ')}</Text>
@@ -981,9 +1049,10 @@ export const register: Register = on => {
                   )
                 }
 
+                // Im schmalen Fenster ohne „cost“: so bleibt die Zeile eine Zeile.
                 return (
                   <Text dimColor>
-                    {nb(from === null ? '        –' : `   cost from ${dayLabel(dateOf(from))}`)}
+                    {nb(from === null ? '        –' : `   ${columns >= 50 ? 'cost ' : ''}from ${dayLabel(dateOf(from))}`)}
                   </Text>
                 )
               })()}
@@ -1039,7 +1108,12 @@ export const register: Register = on => {
       const strip = isApp ? (
         <Box flexDirection="row" width={width} height={1}>
           {cells.map(c => (
-            <Box width={c.cells} height={1} backgroundColor={c.kind === 'used' ? c.color : 'subtle'} />
+            // Puffer und Frei getrennt wie ▒ und ░ im Terminal.
+            <Box
+              width={c.cells}
+              height={1}
+              backgroundColor={c.kind === 'used' ? c.color : c.kind === 'buffer' ? 'inactive' : 'subtle'}
+            />
           ))}
         </Box>
       ) : (
@@ -1054,10 +1128,15 @@ export const register: Register = on => {
         </Text>
       )
       const pct = (n: number) => `${((n / info.max) * 100).toFixed(1)}%`
+      // Zeichen, Name, Tokens, Anteil: 2 + Name + 7 + 8. Im schmalen Fenster wird der Name
+      // gekürzt statt die Zeile umzubrechen; `mono` hält die Spalten auch in den Apps.
+      const nameWidth = Math.max(10, Math.min(22, columns - 17))
+      const fit = (name: string) =>
+        name.length > nameWidth ? `${name.slice(0, nameWidth - 1)}…` : name.padEnd(nameWidth)
       const row = (mark: ReturnType<typeof h>, name: string, value: number) => (
-        <Text>
+        <Text mono>
           {mark}
-          <Text>{nb(` ${name.padEnd(22)}`)}</Text>
+          <Text>{nb(` ${fit(name)}`)}</Text>
           <Text color="claude" tabular>{nb(count(value).padStart(7))}</Text>
           <Text dimColor tabular>{nb(`  ${pct(value).padStart(6)}`)}</Text>
         </Text>
@@ -1074,7 +1153,7 @@ export const register: Register = on => {
           {blank}
           <Text>
             <Text>{nb('Context window  ')}</Text>
-            <Text dimColor>{nb(info.model)}</Text>
+            <Text dimColor>{nb(modelName(info.model))}</Text>
           </Text>
           {strip}
           <Text>
@@ -1130,12 +1209,20 @@ export const register: Register = on => {
             <Box flexDirection="column">
               {blank}
               <Text>{nb('Largest memory files')}</Text>
-              {info.memoryFiles.map(f => (
-                <Text>
-                  <Text dimColor>{nb(`  ${shortPath(f.path).slice(-(Math.max(20, columns - 12)))}`)}</Text>
-                  <Text color="claude">{nb(`  ${count(f.tokens)}`)}</Text>
-                </Text>
-              ))}
+              {info.memoryFiles.map((f, _, all) => {
+                // Lange Pfade verlieren den Anfang, sichtbar mit „…“; die Zahlen stehen untereinander.
+                const room = Math.max(20, columns - 12)
+                const widest = Math.min(room, Math.max(...all.map(one => shortPath(one.path).length)))
+                const path = shortPath(f.path)
+                const shown = path.length > room ? `…${path.slice(-(room - 1))}` : path.padEnd(widest)
+
+                return (
+                  <Text mono>
+                    <Text dimColor>{nb(`  ${shown}`)}</Text>
+                    <Text color="claude" tabular>{nb(`  ${count(f.tokens).padStart(6)}`)}</Text>
+                  </Text>
+                )
+              })}
             </Box>
           )}
           {blank}
@@ -1407,7 +1494,8 @@ export const register: Register = on => {
       return (
         <Box flexDirection="column" width={columns >= 76 ? 38 : undefined}>
           <Text>
-            <Text dimColor>{nb('● ')}</Text>
+            {/* Der Punkt in der Farbe der Linie: so findet man das Modell im Diagramm wieder. */}
+            <Text color={colorOf(id)[0]}>{nb('● ')}</Text>
             <Text color="claude">{nb(modelName(id))}</Text>
             <Text dimColor>{nb(` (${share}%)`)}</Text>
           </Text>
@@ -1485,9 +1573,11 @@ export const register: Register = on => {
     const tapRoom = TAP_WIDTH - 1
     const canTap = e.props.bodyColumns >= TAP_MIN_COLUMNS
     const arrivalAt = await read($, arrival)
-    const isDripping = inFlight > 0 && arrivalAt < 0
-    const strength = await read($, flow)
-    const frames = FLOWS[strength] ?? FLOWS[0]
+    // Das Wasser läuft, solange der Hahn offen ist: beim Streamen und noch kurz danach, bis es ausgelaufen ist.
+    const flowAt = await read($, flow)
+    const isDripping = flowAt >= 0 && arrivalAt < 0
+    const strength = Math.max(0, flowAt)
+    const frames = FLOWS[strength] ?? FLOWS[0] ?? [RESTING]
     const water = isDripping ? (frames[(await read($, drip)) % frames.length] ?? RESTING) : null
     const scene = {
       role: ROLES[(await read($, role)) % ROLES.length] ?? 'reservoir',
@@ -1592,7 +1682,7 @@ export const register: Register = on => {
         <Box flexDirection="row" alignItems="center">
           <Text mono size={isTerminal ? undefined : 'footnote'} wrap="truncate-end">
             <Text color="claude">{nb(MARK)}</Text>
-            <Text dimColor>{nb('Usage: values arrive with the next reply')}</Text>
+            <Text dimColor>{nb("Usage limits appear after Claude's next reply")}</Text>
           </Text>
           {livePart(canTap)}
         </Box>,

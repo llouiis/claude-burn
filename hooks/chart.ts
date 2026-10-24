@@ -10,12 +10,13 @@ type Cell = { char: string; color?: string }
 
 const STEPS = 9
 
-// 0, 45.8M, 366.1M: die Achsenbeschriftung wie im Original.
+// 0, 45.8M, 366.1M: die Achsenbeschriftung wie im Original. Die Schwellen liegen dort,
+// wo die kleinere Einheit schon auf 1000 runden würde: 999.96K heißt 1.0M.
 export function axisLabel(n: number): string {
   if (n === 0) return '0'
-  if (n >= 1e9) return `${(n / 1e9).toFixed(1)}B`
-  if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`
-  if (n >= 1e3) return `${(n / 1e3).toFixed(1)}K`
+  if (n >= 999_950_000) return `${(n / 1e9).toFixed(1)}B`
+  if (n >= 999_950) return `${(n / 1e6).toFixed(1)}M`
+  if (n >= 999.5) return `${(n / 1e3).toFixed(1)}K`
 
   return String(Math.round(n))
 }

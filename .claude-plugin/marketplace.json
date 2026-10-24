@@ -9,7 +9,7 @@
     {
       "name": "nutzung",
       "source": "./",
-      "description": "Dezente Leiste über dem Eingabefeld mit den Nutzungslimits wie /usage, per Klick durchschaltbar; Clawd in einer ausgelosten Rolle (Stausee, Feuer, Garten, Regen, Angler, Bäcker, Astronaut)"
+      "description": "Dezente Leiste über dem Eingabefeld mit den Nutzungslimits wie /usage, per Klick durchschaltbar; daneben trinkt Clawd in einer ausgelosten Rolle Wasser mit (Hahn, Cloud, Kühlturm, Durst, See)"
     }
   ]
 }

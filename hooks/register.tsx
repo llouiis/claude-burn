@@ -13,7 +13,6 @@ import { PREFIX, SPANS, START_KEY, addTo, costFrom, liveTotals } from './ledger'
 import type { Ledger } from './ledger'
 import type { Series } from './chart'
 import {
-  EXTINGUISH,
   FLOWS,
   HEAT_FULL,
   RESTING,
@@ -28,6 +27,7 @@ import {
   sizeLevel,
   stageOf,
   terminalScene,
+  WARM,
 } from './clawd'
 import type { Piece } from './clawd'
 import { MONTHS, RANGES, dateOf, dayNumber, heatmap, modelName, summarize } from './stats'
@@ -100,7 +100,14 @@ let flowSince = 0
 // Tropfen fällt, dann erst ist der Hahn zu.
 let isDraining = false
 // Unter dieser Breite fällt Clawd weg, bevor Zahlen oder Zeitraum gekürzt werden.
+// Nur im Terminal: die Apps rechnen mit appCells und appText (siehe die Leiste).
 const TAP_MIN_COLUMNS = 80
+// In den Apps zählt bodyColumns Zeichen ihrer Code-Schrift (rund 7 bis 8 px breit), ein Svg
+// misst in px. Mit 7 px gerechnet: lieber eine Zelle zu viel als eine umbrochene Leiste.
+const APP_CELL_PX = 7
+const appCells = (px: number) => Math.ceil(px / APP_CELL_PX)
+// Text in footnote ist dort proportional und schmaler als eine Zelle der Code-Schrift.
+const appText = (chars: number) => Math.ceil(chars * 0.85)
 const drip = atom({ plugin: 'nutzung', key: 'drip' } as const, 0)
 // -1 zugedreht, sonst die Stufe wie flowNow; Wasser zeigt die Szene nur, solange es läuft.
 const flow = atom({ plugin: 'nutzung', key: 'flow' } as const, -1)
@@ -116,13 +123,14 @@ const PAUSE = 30 * 60_000
 let arrivalNow = -1
 let arriver: { cancel: () => void } | undefined
 let lastActive = 0
-// Das Feuer: beim Streamen geht die Hitze runter, in der Pause lodert es langsam wieder auf.
-const heat = atom({ plugin: 'nutzung', key: 'heat' } as const, HEAT_FULL)
+// Der Serverschrank im Kühlturm: beim Streamen wird er heiß, in der Pause kühlt er langsam ab;
+// `flicker` lässt dabei die Hitze über ihm flimmern.
+const heat = atom({ plugin: 'nutzung', key: 'heat' } as const, 0)
 const flicker = atom({ plugin: 'nutzung', key: 'flicker' } as const, 0)
-const KINDLE = 1_000
-const KINDLE_STEP = 2
-let heatNow = HEAT_FULL
-let kindler: { cancel: () => void } | undefined
+const COOL = 1_000
+const COOL_STEP = 3
+let heatNow = 0
+let cooler: { cancel: () => void } | undefined
 // Ab wann das Kassenbuch zählt; aus dem Store gelesen, nicht bei jedem Bild.
 let trackedSince: number | undefined
 // stats-cache.json, eine Minute lang gehalten statt bei jedem Neuzeichnen gelesen.
@@ -282,7 +290,7 @@ async function tap($: EngineInterface) {
   if (inFlight > 0) {
     if (dripper === undefined && at - lastActive >= PAUSE) await arrive($)
     lastActive = at
-    stopKindling()
+    stopCooling()
     // Kommt gleich der nächste Strom, läuft das Wasser einfach weiter, ohne neu anzusetzen.
     isDraining = false
     if (dripper !== undefined) return
@@ -296,7 +304,7 @@ async function tap($: EngineInterface) {
   isDraining = true
 }
 
-// Dreht den Hahn ganz zu; in der Pause lodert dann das Feuer wieder auf.
+// Dreht den Hahn ganz zu; in der Pause kühlt dann der Serverschrank ab.
 async function closeTap($: EngineInterface) {
   dripper?.cancel()
   dripper = undefined
@@ -304,7 +312,7 @@ async function closeTap($: EngineInterface) {
   flowNow = -1
   await update($, flow, () => -1)
   await update($, drip, () => 0)
-  kindle($)
+  cool($)
 }
 
 // Startet die Anfahrt von vorn; der Takt zählt hoch und hört am Ende von selbst auf.
@@ -312,7 +320,7 @@ async function arrive($: EngineInterface) {
   arriver?.cancel()
   arrivalNow = 0
   await update($, arrival, () => 0)
-  const length = arrivalLength(ROLES[roleNow] ?? 'reservoir')
+  const length = arrivalLength(ROLES[roleNow] ?? 'tap')
   arriver = $.clock.every(ARRIVE_TICK, () => {
     arrivalNow = arrivalNow + 1 >= length ? -1 : arrivalNow + 1
     if (arrivalNow === -1) {
@@ -323,36 +331,36 @@ async function arrive($: EngineInterface) {
   })
 }
 
-// Die Leiste zeigt vom Feuer nur die Stufe: geschrieben wird erst, wenn sie wechselt,
-// nicht bei jedem Takt, in dem die Hitze ein Stück sinkt oder steigt.
+// Die Leiste zeigt von der Hitze nur die Stufe: geschrieben wird erst, wenn sie wechselt,
+// nicht bei jedem Takt, in dem sie ein Stück sinkt oder steigt.
 async function setHeat($: EngineInterface, value: number, force = false) {
   const before = stageOf(heatNow)
   heatNow = Math.max(0, Math.min(HEAT_FULL, value))
   if (force || stageOf(heatNow) !== before) await update($, heat, () => heatNow)
 }
 
-// In der Pause lodert das Feuer jede Sekunde ein Stück auf, bis es wieder voll brennt.
-function kindle($: EngineInterface) {
-  if (ROLES[roleNow] !== 'fire' || kindler !== undefined || heatNow >= HEAT_FULL) return
-  kindler = $.clock.every(KINDLE, () => {
+// In der Pause kühlt der Schrank jede Sekunde ein Stück ab, bis er wieder kalt ist.
+function cool($: EngineInterface) {
+  if (ROLES[roleNow] !== 'cooling' || cooler !== undefined || heatNow <= 0) return
+  cooler = $.clock.every(COOL, () => {
     void (async () => {
-      await setHeat($, heatNow + KINDLE_STEP)
+      await setHeat($, heatNow - COOL_STEP)
       await update($, flicker, i => i + 1)
-      if (heatNow >= HEAT_FULL) stopKindling()
+      if (heatNow <= 0) stopCooling()
     })().catch(() => undefined)
   })
 }
-function stopKindling() {
-  kindler?.cancel()
-  kindler = undefined
+function stopCooling() {
+  cooler?.cancel()
+  cooler = undefined
 }
 
-// Neue Rolle: das Feuer brennt wieder voll, und Clawd kommt neu an.
+// Neue Rolle: der Schrank ist wieder kalt, und Clawd kommt neu an.
 async function cast($: EngineInterface, index: number) {
   roleNow = index
   await update($, role, () => index)
-  stopKindling()
-  await setHeat($, HEAT_FULL, true)
+  stopCooling()
+  await setHeat($, 0, true)
   await arrive($)
 }
 
@@ -404,9 +412,9 @@ async function flowTick($: EngineInterface) {
     if (isDraining) await closeTap($)
     return
   }
-  // Gelöscht wird erst, wenn Clawd angekommen ist, und je stärker der Strahl, desto schneller.
-  if (ROLES[roleNow] === 'fire' && heatNow > 0) {
-    await setHeat($, heatNow - (EXTINGUISH[flowNow] ?? 0))
+  // Heiß wird der Schrank erst, wenn Clawd angekommen ist, und je mehr Tokens pro Sekunde, desto schneller.
+  if (ROLES[roleNow] === 'cooling' && heatNow < HEAT_FULL) {
+    await setHeat($, heatNow + (WARM[flowNow] ?? 0))
   }
   if (flowNow !== before) return
   // Ausgelaufen: der letzte Tropfen ist aufgeschlagen.
@@ -697,7 +705,7 @@ export const register: Register = on => {
     })
     await $.command.register({
       name: 'clawd',
-      description: "Change Clawd's job in the usage bar; /clawd <job> picks one, e.g. garden or astronaut",
+      description: "Change Clawd's job in the usage bar; /clawd <job> picks one, e.g. tap or lake",
     })
 
     const usage = await $.session.usage()
@@ -1294,7 +1302,9 @@ export const register: Register = on => {
     const shortDay = (date: string) => dayLabel(date)
 
     if (currentTab === 1) {
-      const weeks = Math.max(8, Math.min(52, columns - 4))
+      // In den Apps ist eine Woche 9 px breit, eine Zelle nur rund 7: dort nach px gerechnet,
+      // sonst ragt das Svg im schmalen Fenster (vscode) über den Rand.
+      const weeks = Math.max(8, Math.min(52, isApp ? Math.floor((columns * APP_CELL_PX - 26) / 9) : columns - 4))
       const map = heatmap(cache, today, weeks)
 
       let chart: ReturnType<typeof h>
@@ -1460,8 +1470,17 @@ export const register: Register = on => {
       isApp && Svg !== undefined ? (
         (() => {
           const svg = chartSvg(series, dayList, colors.gray)
+          // Das Diagramm hat feste px; im schmalen Fenster maßstäblich kleiner, die viewBox hält das Verhältnis.
+          const scale = Math.min(1, (columns * APP_CELL_PX) / svg.width)
 
-          return <Svg alt="Tokens per day by model" width={svg.width} height={svg.height} source={svg.source} />
+          return (
+            <Svg
+              alt="Tokens per day by model"
+              width={Math.floor(svg.width * scale)}
+              height={Math.floor(svg.height * scale)}
+              source={svg.source}
+            />
+          )
         })()
       ) : (
         <Box flexDirection="column">
@@ -1567,7 +1586,9 @@ export const register: Register = on => {
     const liveRest = ` tokens · ${span.label} ›`
     // Fest reserviert, mit Pfeil und der längsten Zahl: so bricht die Leiste beim
     // Hochzählen nicht um, und die Details links wechseln nicht mit dem Zählerstand.
-    const liveRoom = (liveMoney === '' ? 0 : '$000.00 · '.length) + '↓ '.length + LIVE_WIDTH + liveRest.length
+    const liveRoomOf = (withMoney: boolean) =>
+      (liveMoney === '' || !withMoney ? 0 : '$000.00 · '.length) + '↓ '.length + LIVE_WIDTH + liveRest.length
+    const liveRoom = liveRoomOf(true)
     // Clawd steht in beiden Zuständen gleich breit da (dafür zwei Leerzeichen weniger davor).
     // Er kommt nur, wenn links dafür nichts wegfallen muss.
     const tapRoom = TAP_WIDTH - 1
@@ -1580,7 +1601,7 @@ export const register: Register = on => {
     const frames = FLOWS[strength] ?? FLOWS[0] ?? [RESTING]
     const water = isDripping ? (frames[(await read($, drip)) % frames.length] ?? RESTING) : null
     const scene = {
-      role: ROLES[(await read($, role)) % ROLES.length] ?? 'reservoir',
+      role: ROLES[(await read($, role)) % ROLES.length] ?? 'tap',
       water,
       strength,
       tick: await read($, drip),
@@ -1648,7 +1669,7 @@ export const register: Register = on => {
         </Box>
       )
     }
-    const livePart = (hasTap: boolean) => [
+    const livePart = (hasTap: boolean, withMoney = true) => [
       <Box flexGrow={1} />,
       <Text>{nb(hasTap ? ' ' : '   ')}</Text>,
       hasTap ? tapPart : null,
@@ -1661,12 +1682,12 @@ export const register: Register = on => {
           await publish($, true)
         }}
       >
-        {liveMoney !== '' && (
+        {liveMoney !== '' && withMoney && (
           <Text size="footnote" color="claude" tabular>
             {liveMoney}
           </Text>
         )}
-        {liveMoney !== '' && <Text size="footnote" dimColor>{nb(' · ')}</Text>}
+        {liveMoney !== '' && withMoney && <Text size="footnote" dimColor>{nb(' · ')}</Text>}
         {liveArrow !== '' && <Text size="footnote" dimColor>{nb(liveArrow)}</Text>}
         <Text size="footnote" color="claude" tabular>
           {liveValue}
@@ -1675,7 +1696,64 @@ export const register: Register = on => {
       </Button>,
     ]
 
+    // Die Apps, desktop und vscode gleich und nur nach der Breite: erst fallen die Details weg,
+    // dann rückt der Zähler mit Clawd unter die Limits, dann geht dort der Preis. Clawd tritt
+    // erst beiseite, wenn auch das nicht passt. Das Terminal rechnet weiter wie unten.
+    type AppPlan = { detail: string | undefined; hasTap: boolean; isStacked: boolean; withMoney: boolean }
+    const appRoom = e.props.bodyColumns - 1
+    const appLive = (hasTap: boolean, withMoney: boolean) =>
+      appText((hasTap ? 2 : 3) + liveRoomOf(withMoney)) + (hasTap ? appCells(SCENE_SVG.width) : 0)
+    const appPlan = (left: (detail: string | undefined) => number, details: string[]): AppPlan => {
+      const options = [...details, undefined]
+      const fits = (detail: string | undefined, withMoney: boolean, isStacked: boolean) =>
+        isStacked
+          ? left(detail) <= appRoom && appLive(true, withMoney) <= appRoom
+          : left(detail) + appLive(true, withMoney) <= appRoom
+      for (const [isStacked, withMoney] of [[false, true], [true, true], [true, false]] as const) {
+        const detail = options.find(d => fits(d, withMoney, isStacked))
+        if (detail !== undefined || fits(undefined, withMoney, isStacked)) {
+          return { detail, hasTap: true, isStacked, withMoney }
+        }
+      }
+
+      return {
+        detail: options.find(d => left(d) <= appRoom),
+        hasTap: false,
+        isStacked: true,
+        withMoney: appLive(false, true) <= appRoom,
+      }
+    }
+    // Eine Zeile, oder die Limits oben und darunter rechtsbündig Clawd mit dem Zähler.
+    const appBand = (plan: AppPlan, limits: ReturnType<typeof h>) =>
+      plan.isStacked ? (
+        <Box flexDirection="column">
+          {limits}
+          <Box flexDirection="row" alignItems="center">
+            {livePart(plan.hasTap, plan.withMoney)}
+          </Box>
+        </Box>
+      ) : (
+        <Box flexDirection="row" alignItems="center">
+          {limits}
+          {livePart(plan.hasTap, plan.withMoney)}
+        </Box>
+      )
+
     const current = await read($, reading)
+    if (current === null && !isTerminal) {
+      const waiting = "Usage limits appear after Claude's next reply"
+
+      return appBand(
+        // In mono eine Zelle je Zeichen; wird es eng, kürzt der Text sein Ende.
+        appPlan(() => Math.min(MARK.length + waiting.length, appRoom), []),
+        <Box flexDirection="row" alignItems="center" flexShrink={1}>
+          <Text mono size="footnote" wrap="truncate-end">
+            <Text color="claude">{nb(MARK)}</Text>
+            <Text dimColor>{nb(waiting)}</Text>
+          </Text>
+        </Box>,
+      )
+    }
     if (current === null) {
       return withUnder(
         canTap,
@@ -1704,8 +1782,19 @@ export const register: Register = on => {
       MARK.length + label.length + barCells + amount.length + separator.length + gap.length +
       position.length + 2 + STATS_BUTTON.length
     const room = e.props.bodyColumns - 5 - liveRoom
-    const detail = shown.details.find(text => fixed + text.length <= room)
-    const hasTap = canTap && shown.details.find(text => fixed + text.length <= room - tapRoom) === detail
+    const termDetail = shown.details.find(text => fixed + text.length <= room)
+    const hasTermTap = canTap && shown.details.find(text => fixed + text.length <= room - tapRoom) === termDetail
+    // In den Apps steht der Balken als Svg in px da, der Trenner nur mit einem Detail.
+    const plan = isTerminal
+      ? null
+      : appPlan(
+          text =>
+            appText(fixed - barCells - (text === undefined ? separator.length : 0) + (text?.length ?? 0)) +
+            (shown.percent === null ? 0 : appCells(APP_BAR.width)),
+          shown.details,
+        )
+    const detail = plan === null ? termDetail : plan.detail
+    const hasTap = plan === null ? hasTermTap : plan.hasTap
     const filled =
       shown.percent === null
         ? 0
@@ -1715,73 +1804,89 @@ export const register: Register = on => {
     const colors = !isTerminal && (await read($, isLight)) ? PALETTE.light : PALETTE.dark
 
     // Farben stehen außerhalb der Buttons: die Desktop-App übermalt deren Inhalt.
+    const controls = [
+      position !== '' && (
+        <Button
+          key="nutzung"
+          plain
+          dimColor
+          autoFocus
+          label={nb(position)}
+          onPress={() => void update($, view, i => (i + 1) % list.length)}
+        >
+          <Text size="footnote">{nb(position)}</Text>
+        </Button>
+      ),
+      <Text>{nb('  ')}</Text>,
+      <Button
+        key="statistik"
+        plain
+        dimColor
+        label={STATS_BUTTON}
+        onPress={() => void $.ui.open({ id: PANE, title: PANE_TITLE, closeOnEscape: true })}
+      >
+        <Text size="footnote">{STATS_BUTTON}</Text>
+      </Button>,
+    ]
+    const limits = isTerminal ? (
+      <Text mono>
+        <Text color="claude">{nb(MARK)}</Text>
+        <Text>{nb(label)}</Text>
+        <Text color={color} dimColor={color === undefined}>
+          {'█'.repeat(filled)}
+        </Text>
+        <Text color={color ?? 'suggestion'} dimColor>
+          {shown.percent === null ? '' : '█'.repeat(BAR_WIDTH - filled)}
+        </Text>
+        <Text>{nb(amount)}</Text>
+        <Text dimColor>{tail}</Text>
+        <Text>{nb(gap)}</Text>
+      </Text>
+    ) : (
+      <Box flexDirection="row" alignItems="center">
+        <Text size="footnote">
+          <Text color="claude">{nb(MARK)}</Text>
+          <Text>{nb(label)}</Text>
+        </Text>
+        {shown.percent !== null &&
+          (Svg !== undefined ? (
+            // Ein schmaler Strich statt einer ganzen Zeile: hält die Leiste flach.
+            <Svg
+              alt={`${Math.round(shown.percent)}% used`}
+              width={APP_BAR.width}
+              height={APP_BAR.height}
+              source={appBar(shown.percent, shown.isStale, colors)}
+            />
+          ) : (
+            <Box flexDirection="row" width={BAR_WIDTH} height={1}>
+              {filled > 0 && <Box width={filled} height={1} backgroundColor={color ?? 'inactive'} />}
+              {filled < BAR_WIDTH && <Box width={BAR_WIDTH - filled} height={1} backgroundColor="subtle" />}
+            </Box>
+          ))}
+        {/* Liegt die Schätzung daneben, kürzt das Detail sein Ende, statt umzubrechen. */}
+        <Text size="footnote" tabular wrap="truncate-end">
+          <Text>{nb(amount)}</Text>
+          <Text dimColor>{tail}</Text>
+          <Text>{nb(gap)}</Text>
+        </Text>
+      </Box>
+    )
+
+    if (plan !== null) {
+      return appBand(
+        plan,
+        <Box flexDirection="row" alignItems="center">
+          {limits}
+          {controls}
+        </Box>,
+      )
+    }
+
     return withUnder(
       hasTap,
       <Box flexDirection="row" alignItems="center">
-        {isTerminal ? (
-          <Text mono>
-            <Text color="claude">{nb(MARK)}</Text>
-            <Text>{nb(label)}</Text>
-            <Text color={color} dimColor={color === undefined}>
-              {'█'.repeat(filled)}
-            </Text>
-            <Text color={color ?? 'suggestion'} dimColor>
-              {shown.percent === null ? '' : '█'.repeat(BAR_WIDTH - filled)}
-            </Text>
-            <Text>{nb(amount)}</Text>
-            <Text dimColor>{tail}</Text>
-            <Text>{nb(gap)}</Text>
-          </Text>
-        ) : (
-          <Box flexDirection="row" alignItems="center">
-            <Text size="footnote">
-              <Text color="claude">{nb(MARK)}</Text>
-              <Text>{nb(label)}</Text>
-            </Text>
-            {shown.percent !== null &&
-              (Svg !== undefined ? (
-                // Ein schmaler Strich statt einer ganzen Zeile: hält die Leiste flach.
-                <Svg
-                  alt={`${Math.round(shown.percent)}% used`}
-                  width={APP_BAR.width}
-                  height={APP_BAR.height}
-                  source={appBar(shown.percent, shown.isStale, colors)}
-                />
-              ) : (
-                <Box flexDirection="row" width={BAR_WIDTH} height={1}>
-                  {filled > 0 && <Box width={filled} height={1} backgroundColor={color ?? 'inactive'} />}
-                  {filled < BAR_WIDTH && <Box width={BAR_WIDTH - filled} height={1} backgroundColor="subtle" />}
-                </Box>
-              ))}
-            <Text size="footnote" tabular>
-              <Text>{nb(amount)}</Text>
-              <Text dimColor>{tail}</Text>
-              <Text>{nb(gap)}</Text>
-            </Text>
-          </Box>
-        )}
-        {position !== '' && (
-          <Button
-            key="nutzung"
-            plain
-            dimColor
-            autoFocus
-            label={nb(position)}
-            onPress={() => void update($, view, i => (i + 1) % list.length)}
-          >
-            <Text size="footnote">{nb(position)}</Text>
-          </Button>
-        )}
-        <Text>{nb('  ')}</Text>
-        <Button
-          key="statistik"
-          plain
-          dimColor
-          label={STATS_BUTTON}
-          onPress={() => void $.ui.open({ id: PANE, title: PANE_TITLE, closeOnEscape: true })}
-        >
-          <Text size="footnote">{STATS_BUTTON}</Text>
-        </Button>
+        {limits}
+        {controls}
         {livePart(hasTap)}
       </Box>,
     )

@@ -52,6 +52,7 @@ declare module 'claude-code' {
       tab: number
       live: Shaped<LiveTotals>
       liveCost: Shaped<LiveTotals>
+      liveOut: Shaped<LiveTotals>
       liveSpan: number
       streamed: number
       lag: number

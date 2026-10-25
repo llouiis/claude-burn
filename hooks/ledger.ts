@@ -96,3 +96,20 @@ export function costFrom(
 
   return berlinDay(nowMs) >= readyDay ? true : readyDay
 }
+
+// Die ausgegebenen Tokens seit Beginn für die Liter am Hahn: /stats kennt sie je Modell bis zu
+// seinem letzten Rechentag, danach zählt das eigene Buch. Für 24h, 7d und 30d reicht das Buch
+// allein, es füllt sich ab seinem ersten Eintrag.
+export function allOutput(cache: StatsCache | null, ledgers: Ledger[], berlinDay: (ms: number) => number): number {
+  const fromCache = Object.values(cache?.modelUsage ?? {}).reduce((sum, m) => sum + m.outputTokens, 0)
+  const lastDay = cache?.lastComputedDate === undefined ? Number.NEGATIVE_INFINITY : dayNumber(cache.lastComputedDate)
+  const after = ledgers.reduce(
+    (sum, ledger) =>
+      sum +
+      Object.entries(ledger.buckets).reduce((s, [hour, value]) => (berlinDay(Number(hour)) > lastDay ? s + value : s), 0) +
+      (fromCache === 0 ? ledger.archived : 0),
+    0,
+  )
+
+  return fromCache + after
+}

@@ -2,7 +2,8 @@
 // für die Tokens pro Sekunde (nur solange gestreamt wird) und die Größe für die Tokens der
 // Sitzung. Zu Beginn und nach einer langen Pause kommt er erst an. Das Thema: KI trinkt Wasser,
 // jede Antwort kostet ein paar Schlucke. Clawd weiß das und macht trotzdem weiter.
-//   Hahn:     Klempner-Clawd am tropfenden Hahn, der Eimer füllt sich, läuft über, die Pfütze wächst.
+//   Hahn:     Clawd dreht den Hahn auf und scrollt am Handy, das Wasser läuft in den Abfluss. Je mehr
+//             Liter, desto bequemer: Hocker, Liegestuhl, Sonnenschirm mit Drink.
 //   Cloud:    Clawd unterm Schirm, in der Wolke blinken Server, bei viel Tempo blitzt es.
 //   Kühlturm: Feuerwehr-Clawd kühlt einen Serverschrank, der beim Streamen heiß wird; der Tank leert sich.
 //   Durst:    Clawd gluckert aus der Flasche, die leeren stapeln sich neben ihm.
@@ -15,7 +16,7 @@ export const ROLES = ['tap', 'cloud', 'cooling', 'thirst', 'lake'] as const
 export type Role = (typeof ROLES)[number]
 // Für /clawd: englisch wie die Leiste, die deutschen Wörter gehen auch.
 export const ROLE_WORDS: Record<Role, string[]> = {
-  tap: ['tap', 'hahn', 'wasserhahn', 'eimer', 'bucket', 'klempner', 'plumber'],
+  tap: ['tap', 'hahn', 'wasserhahn', 'abfluss', 'drain', 'handy', 'phone'],
   cloud: ['cloud', 'wolke', 'regen', 'rain', 'schirm', 'umbrella'],
   cooling: ['cooling', 'kühlturm', 'kuehlturm', 'kühlung', 'kuehlung', 'server', 'feuerwehr'],
   thirst: ['thirst', 'durst', 'flasche', 'bottle', 'trinken', 'drink'],
@@ -92,7 +93,26 @@ export type Scene = {
   flicker: number
   // Takt der Anfahrt, -1 ist angekommen
   arrival: number
+  // Nur am Hahn: die verschwendeten Liter, wie sie unter dem Abfluss stehen
+  liters?: string
 }
+
+// Wasser je ausgegebenem Token nach Mistrals Ökobilanz (2025): 45 ml für eine Antwort mit 400 Tokens.
+export const ML_PER_TOKEN = 45 / 400
+// „≈ 340 ml“, ab einem Liter „≈ 1,4 L“, ab 100 L ohne Nachkomma; nichts, solange nichts lief.
+export function literText(ml: number): string {
+  if (ml < 0.5) return ''
+  if (ml < 1_000) return `≈ ${Math.round(ml)} ml`
+  const liters = ml / 1_000
+  const shown = liters < 100 ? liters.toFixed(1).replace('.', ',') : Math.round(liters).toLocaleString('de-DE')
+
+  return `≈ ${shown} L`
+}
+// Am Hahn zählt die Größe in Litern der Sitzung: 1 sobald etwas lief, dann je eine Stufe bequemer
+// ab 1, 5 und 20 L (Hocker, Liegestuhl, Sonnenschirm mit Drink).
+const COMFORT_AT = [1_000, 5_000, 20_000]
+export const tapLevel = (ml: number) => (ml < 0.5 ? 0 : 1 + COMFORT_AT.filter(at => ml >= at).length)
+const comfortOf = (level: number) => Math.max(0, Math.min(3, level - 1))
 
 // ---------- Terminal ----------
 // Drei Zeilen, je neun Spalten für Clawd: Kopf in der Leiste, darunter zwei Zeilen. Rechts davon
@@ -134,10 +154,18 @@ export const LEGS: Piece[] = [{ text: ' ▘▘ ▝▝   ', color: 'claude' }]
 // Beim Gehen im Wechsel ein Bein vor.
 const STEP: Piece[] = [{ text: ' ▝▘ ▘▝   ', color: 'claude' }]
 const CLAWD: Piece[] = [{ text: '▐▛███▜▌', color: 'claude' }, { text: '  ' }]
-// Klempnerkappe mit dem Schild nach vorn, daneben hängt der Hahn mit rotem Griff.
-const CAP: Piece[] = [{ text: ' ▄▆██▆▄▖', color: 'suggestion' }]
+// Der Hahn mit rotem Hebel: aufgedreht steht er hoch, zu liegt er flach.
 const TAP: Piece[] = [{ text: '┓', color: 'inactive' }]
-const TAP_HANDLE: Piece[] = [{ text: '┻', color: 'error' }]
+const TAP_OPEN: Piece[] = [{ text: '┻', color: 'error' }]
+const TAP_SHUT: Piece[] = [{ text: '━', color: 'error' }]
+// Der Sonnenschirm ab 20 L, rot und weiß gestreift.
+const PARASOL: Piece[] = [
+  { text: '▗▄', color: 'error' },
+  { text: '▆', color: 'inactive' },
+  { text: '█', color: 'error' },
+  { text: '▆', color: 'inactive' },
+  { text: '▄▖', color: 'error' },
+]
 // Strohhut für den Strohhalm: flache Krone, breite Krempe.
 const STRAW_HAT: Piece[] = [{ text: '▁▂▅▅▅▂▁▁ ', color: 'warning' }]
 // Schirm mit gelben und roten Bahnen wie in den Apps, damit er nicht wie ein Hut aussieht.
@@ -211,43 +239,40 @@ export function puddle(level: number, hit: number | null): string {
 // Was eine Rolle zeichnet: den Kopf in der Leiste, Clawds zwei Zeilen und rechts die Szene.
 type Parts = { head: Cell[]; slots: Cell[][]; rights: Cell[][] }
 
-// Hahn: der Hahn hängt in der Leiste neben der Kappe, darunter fällt das Wasser in Spalte 8
-// in den Eimer (Spalten 7 bis 9). Bis Stufe 5 steigt der Pegel, danach läuft er über und die
-// Pfütze breitet sich nach rechts aus.
-const BUCKET = '▁▂▃▄▆█'
-const OVERFLOW = [1, 2, 4, 6, 8]
+// Hahn: der Hahn hängt in der Leiste über dem Becken (Spalten 7 bis 9), das Wasser fällt in
+// Spalte 8 in den Abfluss und ist weg. Clawd hält das Handy in Spalte 7 und sieht nicht hin. Mit
+// den Litern wird er bequemer: auf dem Hocker, im Liegestuhl, dann unterm Sonnenschirm mit Drink.
+// Rechts neben dem Becken stehen die Liter.
+const SEATS = [
+  [{ text: ' ▘▘ ▝▝ ', color: 'claude' }],
+  [{ text: ' ╤═══╤ ', color: 'warning' }],
+  [{ text: '╲', color: 'inactive' }, { text: '▚▚▚▚▚', color: 'warning' }, { text: '╱', color: 'inactive' }],
+] satisfies Piece[][]
+export const isTapOpen = (arrival: number) => arrival < 0 || arrival > ARRIVE.in
 function tapParts(scene: Scene): Parts {
-  const { water, strength, tick, level } = scene
-  const head = cellsOf([...CAP, ...TAP])
-  head[7] = cellsOf(TAP_HANDLE)[0] ?? BLANK
-  const top = cellsOf(CLAWD)
-  const low = cellsOf(LEGS)
-  const fill = Math.min(5, level)
-  let inner = fill
+  const { water, strength, tick, level, arrival, liters } = scene
+  const comfort = comfortOf(level)
+  const head = [...(comfort === 3 ? cellsOf(PARASOL) : blank(7)), ...cellsOf(isTapOpen(arrival) ? TAP_OPEN : TAP_SHUT), ...cellsOf(TAP)]
+  // Das Handy leuchtet; beim Scrollen flackert es ab und zu.
+  const top: Cell[] = [...cellsOf([{ text: '▐▛███▜▌', color: 'claude' }]), { ch: '▮', color: 'suggestion', dim: tick % 5 === 4 }, BLANK]
+  const low: Cell[] = cellsOf(SEATS[Math.min(2, comfort)] ?? [])
   const right: Cell[] = []
-  // Dicht ist er nie: zugedreht hängt ein Tropfen am Auslauf.
-  if (water === null) top[8] = { ch: "'", color: 'suggestion', dim: true }
+  if (comfort === 3) put(right, 2, { ch: '▿', color: 'warning' })
+  let drain: Cell = level === 0 ? { ch: '▁', color: 'inactive', dim: true } : { ch: '▁', color: 'suggestion', dim: true }
   if (water !== null) {
     if (strength <= 1) {
       if (water.drop !== null) top[8] = { ch: water.cell, color: 'suggestion' }
-      if (water.isSplash) inner += 1
+      if (water.isSplash) drain = { ch: ',', color: 'suggestion' }
     } else {
-      // Läuft und sprudelt: ein Strahl, dessen Striche wandern; ganz stark spritzt es aus dem Eimer.
+      // Läuft und sprudelt: ein Strahl, dessen Striche wandern; im Abfluss strudelt es.
       top[8] = { ch: strength === 3 ? (tick % 2 === 0 ? '┃' : '╏') : tick % 2 === 0 ? '│' : '╎', color: 'suggestion' }
-      inner += tick % 2
-      if (strength === 3) put(tick % 2 === 0 ? right : top, tick % 2 === 0 ? 1 : 7, { ch: '˙', color: 'suggestion' })
+      drain = { ch: tick % 2 === 0 ? '◌' : '○', color: 'suggestion' }
+      if (strength === 3) put(right, 1, { ch: tick % 2 === 0 ? '˙' : '·', color: 'suggestion' })
     }
   }
-  const water8 = BUCKET[Math.min(BUCKET.length - 1, inner)] ?? '█'
-  low[7] = { ch: '▕', color: 'inactive' }
-  low[8] = level === 0 && inner === 0 ? { ch: '▁', color: 'inactive', dim: true } : { ch: water8, color: 'suggestion' }
-  const floor: Cell[] = [{ ch: '▏', color: 'inactive' }]
-  const spill = OVERFLOW[level - 6] ?? 0
-  for (let i = 0; i < spill; i += 1) {
-    const ch = i === 0 || (level >= 9 && i < 3) ? '▂' : '▁'
-    const isWave = water !== null && i === spill - 1 && tick % 2 === 1
-    floor.push({ ch: isWave ? '▂' : ch, color: 'suggestion', dim: true })
-  }
+  low.push({ ch: '╲', color: 'inactive' }, drain)
+  const floor: Cell[] = [{ ch: '╱', color: 'inactive' }]
+  if (liters !== undefined && liters !== '') floor.push(BLANK, ...cellsOf([{ text: liters, color: 'suggestion', dim: true }]))
 
   return { head, slots: [top, low], rights: [right, floor] }
 }
@@ -471,8 +496,8 @@ export function terminalScene(scene: Scene, room: number, reach: number): Termin
   if (arrival >= 0) {
     const hidden = blank(SLOT)
     if (isWalking(role)) {
-      // Zu Fuß: Clawd läuft von links an seinen Platz. Unterm Schirm zieht danach die Wolke auf;
-      // als Klempner trägt er den Eimer und setzt erst dort die Kappe auf.
+      // Zu Fuß: Clawd läuft von links an seinen Platz. Unterm Schirm zieht danach die Wolke auf,
+      // am Hahn dreht er nebenbei auf.
       const walked = Math.min(1, arrival / ARRIVE.in)
       const at = Math.round(-(room + SLOT) * (1 - walked))
       if (role === 'cloud') {
@@ -480,12 +505,13 @@ export function terminalScene(scene: Scene, room: number, reach: number): Termin
         const share = arrival < ARRIVE.in ? 0 : (arrival - ARRIVE.in + 1) / ARRIVE.hold
         headCells = cloud(level, share)
       } else if (arrival < ARRIVE.in) {
-        const carrying = [
-          cellsOf([...CLAWD.slice(0, 1), { text: ' ' }, { text: '▙▟', color: 'inactive' }]),
+        // Am Hahn kommt er mit dem Handy vor der Nase, Becken und Hahn warten schon.
+        const walking = [
+          cellsOf([...CLAWD.slice(0, 1), { text: '▮', color: 'suggestion' }]),
           cellsOf(arrival % 2 === 0 ? LEGS : STEP),
         ]
-        rights = [[], []]
-        overlay(carrying, at, [hidden, hidden])
+        const sink = slots.map((slot, r) => [...blank(7), ...(r === 1 ? slot.slice(7) : blank(2))])
+        overlay(walking, at, sink)
         headCells = [...blank(7), ...headCells.slice(7)]
       }
     } else {
@@ -564,7 +590,7 @@ const crisp = (inner: string) => `<g shape-rendering="crispEdges">${inner}</g>`
 // Stiefel je Rolle, hell genug für dunkle und helle Hintergründe: Arbeitsschuhe, barfuß unterm
 // Schirm, Gummistiefel, weiße Turnschuhe, barfuß am See.
 const BOOTS: Record<Role, string | null> = {
-  tap: INK.sole,
+  tap: null,
   cloud: null,
   cooling: INK.sole,
   thirst: INK.flourDark,
@@ -604,22 +630,6 @@ function clawdPx(role: Role, step: number, isGulping = false, isHolding = false)
       px(27, 16, 1, 2, INK.hose),
       px(28, 16, 4, 2, INK.brass),
       px(32, 16.5, 2, 1, INK.tip),
-    )
-  } else if (role === 'tap') {
-    parts.push(
-      // Blaue Latzhose, Kappe mit dem Schild nach vorn, Rohrzange in der Schere
-      px(11, 17, 10, 2, INK.denim),
-      px(8, 19, 16, 3, INK.denim),
-      px(12, 18, 1, 1, INK.gold),
-      px(19, 18, 1, 1, INK.gold),
-      px(11, 7, 10, 1, INK.denim),
-      px(10, 8, 12, 3, INK.denim),
-      px(10, 10, 12, 1, INK.denimDark),
-      px(19, 11, 8, 1, INK.denimDark),
-      px(15, 8, 2, 1, INK.shine),
-      px(27, 16.5, 5, 1, INK.concrete),
-      px(31, 15, 1, 1.5, INK.concrete),
-      px(32, 15, 1.5, 1, INK.concrete),
     )
   } else if (role === 'thirst') {
     // Rotes Schweißband, die Enden flattern hinten links.
@@ -687,76 +697,118 @@ function truckPx(t: number, roll: number): string {
 const splashSvg = (x: number, y: number, colors: SceneColors) =>
   `<ellipse cx="${x}" cy="${y}" rx="2.5" ry="0.9" fill="none" stroke="${colors.suggestion}" stroke-opacity="0.6" stroke-width="0.7"/><circle cx="${x - 1.5}" cy="${y - 2}" r="0.6" fill="${colors.suggestion}" fill-opacity="0.7"/><circle cx="${x + 1.5}" cy="${y - 2.5}" r="0.6" fill="${colors.suggestion}" fill-opacity="0.7"/>`
 
-// Hahn: Standrohr bei x 48 mit rotem Drehgriff, der Auslauf über dem Eimer bei x 41. Der Eimer
-// füllt sich bis Stufe 5, danach rinnt es über den Rand und die Pfütze wird breiter, bis Clawd
-// nasse Füße hat.
-const SPOUT = { x: 41, y: 14.5 }
-const PAIL = { left: 36, right: 46, top: 19.5 }
-function tapSvg(scene: Scene, colors: SceneColors, hasBucket: boolean): { back: string; front: string } {
+// Hahn: ein Waschbecken auf dem Standfuß, der Hahn mit rotem Hebel hinten rechts, der Auslauf
+// über dem Abfluss. Aufgefangen wird nichts: das Wasser gurgelt weg, beim Strahl strudelt es.
+const SPOUT = { x: 47.2, y: 13.6 }
+const DRAIN = { x: 47, y: 20.4 }
+function sinkSvg(scene: Scene, colors: SceneColors, isOpen: boolean): string {
   const { water, strength, tick, level } = scene
   const wet = `fill="${colors.suggestion}"`
-  const spill = Math.max(0, level - 5)
-  const pool = spill > 0 ? `<ellipse cx="41" cy="${GROUND}" rx="${7 + spill * 2.6}" ry="${1 + spill * 0.15}" ${wet} fill-opacity="0.35"/>` : ''
-  const pipe = crisp(
-    [
-      px(47, 10, 2.5, GROUND - 10, INK.concrete),
-      px(46.5, GROUND - 1, 3.5, 1, INK.concreteTop),
-      px(40, 10, 9.5, 2, INK.concreteTop),
-      px(40, 12, 2, 2.5, INK.concreteTop),
-      px(39.7, 14, 2.6, 0.6, INK.concrete),
-      px(44, 9, 1, 1, INK.concrete),
-      px(42, 7.8, 5, 1.2, INK.red),
-      px(44, 7, 1, 3, INK.red),
-    ].join(''),
-  )
-  if (!hasBucket) return { back: pool + pipe, front: '' }
-  const fill = Math.min(5, level) / 5
-  const depth = 7.2 * fill
-  const surface = GROUND - 0.6 - depth
-  // Der Eimer verjüngt sich nach unten: oben 10 breit, unten 8.
-  const inset = (y: number) => ((y - PAIL.top) / (GROUND - PAIL.top)) * 1
-  const bucket =
-    `<path d="M${PAIL.left} ${PAIL.top} L${PAIL.right} ${PAIL.top} L${PAIL.right - 1} ${GROUND} L${PAIL.left + 1} ${GROUND} Z" fill="${INK.concrete}"/>` +
-    (depth > 0
-      ? `<path d="M${PAIL.left + 0.8 + inset(surface)} ${surface} L${PAIL.right - 0.8 - inset(surface)} ${surface} L${PAIL.right - 1.6} ${GROUND - 0.6} L${PAIL.left + 1.6} ${GROUND - 0.6} Z" ${wet} fill-opacity="0.85"/>`
-      : '') +
-    crisp(px(PAIL.left - 0.3, PAIL.top - 0.6, 10.6, 1, INK.concreteTop) + px(PAIL.left + 1, 23.5, 8, 0.4, INK.concreteTop, ' fill-opacity="0.5"')) +
-    `<path d="M${PAIL.left + 1} ${PAIL.top - 0.4} Q 41 ${PAIL.top - 5} ${PAIL.right - 1} ${PAIL.top - 0.4}" fill="none" stroke="${INK.concreteTop}" stroke-width="0.5"/>`
-  // Übergelaufen: an beiden Seiten rinnt es den Eimer hinab.
-  const over =
-    spill > 0
-      ? `<path d="M${PAIL.left} ${PAIL.top - 0.2} Q ${PAIL.left - 0.8} 23 ${PAIL.left - 0.2} ${GROUND}" fill="none" stroke="${colors.suggestion}" stroke-opacity="0.8" stroke-width="0.9"/>` +
-        `<path d="M${PAIL.right} ${PAIL.top - 0.2} Q ${PAIL.right + 0.8} 23 ${PAIL.right + 0.2} ${GROUND}" fill="none" stroke="${colors.suggestion}" stroke-opacity="0.8" stroke-width="0.9"/>`
-      : ''
-  const land = depth > 0 ? surface : GROUND - 1
+  const lever = isOpen
+    ? `<path d="M52.5 10 L55.5 7.3" stroke="${INK.red}" stroke-width="1.3" stroke-linecap="round"/>`
+    : `<path d="M52.5 10 L56.5 10" stroke="${INK.red}" stroke-width="1.3" stroke-linecap="round"/>`
+  const sink =
+    crisp(
+      [
+        px(45, 21.5, 4, GROUND - 21.5, INK.concrete),
+        px(43.5, GROUND - 0.8, 7, 0.8, INK.concreteTop),
+        px(51.5, 10, 2, 8, INK.concrete),
+        px(46.4, 10, 7.1, 1.6, INK.concreteTop),
+        px(46.4, 11.6, 1.6, 2, INK.concreteTop),
+      ].join(''),
+    ) +
+    lever +
+    `<path d="M37 18.6 L57 18.6 Q 56 23 47 23 Q 38 23 37 18.6 Z" fill="${INK.silver}"/>` +
+    `<path d="M38.6 19.6 L55.4 19.6 Q 54.4 21.8 47 21.8 Q 39.6 21.8 38.6 19.6 Z" fill="${INK.concreteTop}"${level > 0 ? '' : ' fill-opacity="0.6"'}/>` +
+    crisp(px(36.6, 17.8, 20.8, 1, INK.flourDark)) +
+    `<ellipse cx="${DRAIN.x}" cy="${DRAIN.y}" rx="1.5" ry="0.45" fill="${INK.boot}"/>`
   let stream = ''
   if (water !== null) {
     if (water.drop !== null) {
-      const y = SPOUT.y + 1 + ((land - SPOUT.y - 2) * water.drop) / 2
+      const y = SPOUT.y + 1 + ((DRAIN.y - SPOUT.y - 2) * water.drop) / 2
       stream = `<ellipse cx="${SPOUT.x}" cy="${y.toFixed(1)}" rx="0.9" ry="1.2" ${wet} fill-opacity="0.9"/>`
     } else if (water.isSplash && water.jet === 0) {
-      stream = splashSvg(SPOUT.x, land, colors)
+      stream = splashSvg(SPOUT.x, DRAIN.y, colors)
     }
     if (water.jet > 0) {
       const width = strength === 3 ? 2 : 1.1
       stream =
-        `<path d="M${SPOUT.x} ${SPOUT.y} L${SPOUT.x} ${land}" stroke="${colors.suggestion}" stroke-opacity="0.85" stroke-width="${width}" stroke-dasharray="${strength === 3 ? '3 0.8' : '2 1.2'}" stroke-dashoffset="${-(tick % 4) * 0.9}"/>` +
-        `<ellipse cx="${SPOUT.x}" cy="${land}" rx="${strength === 3 ? 3 : 2}" ry="0.7" fill="none" stroke="${colors.suggestion}" stroke-opacity="0.7" stroke-width="0.6"/>`
-      // Sprudelt: Spritzer fliegen aus dem Eimer.
+        `<path d="M${SPOUT.x} ${SPOUT.y} L${SPOUT.x} ${DRAIN.y}" stroke="${colors.suggestion}" stroke-opacity="0.85" stroke-width="${width}" stroke-dasharray="${strength === 3 ? '3 0.8' : '2 1.2'}" stroke-dashoffset="${-(tick % 4) * 0.9}"/>` +
+        // Der Strudel im Abfluss dreht sich mit dem Takt, beim Sprudeln weiter außen ein zweiter Ring.
+        [3, ...(strength === 3 ? [5.5] : [])]
+          .map(
+            (r, i) =>
+              `<ellipse cx="${DRAIN.x}" cy="${DRAIN.y}" rx="${r}" ry="${(r * 0.28).toFixed(2)}" fill="none" stroke="${colors.suggestion}" stroke-opacity="${0.75 - i * 0.25}" stroke-width="0.6" stroke-dasharray="2.2 1.4" stroke-dashoffset="${((tick + i) % 4) * (i === 0 ? 0.9 : -0.9)}"/>`,
+          )
+          .join('')
       if (strength === 3) {
-        const up = tick % 2 === 0 ? 0 : 1.5
-        stream += [[-3.5, -3], [3.5, -2.5], [-1.8, -5], [2, -4.5]]
-          .map(([dx, dy], i) => `<circle cx="${SPOUT.x + (dx ?? 0) * (i % 2 === tick % 2 ? 1.2 : 1)}" cy="${(land + (dy ?? 0) - (i < 2 ? up : -up * 0.5)).toFixed(1)}" r="0.55" ${wet} fill-opacity="0.85"/>`)
+        const up = tick % 2 === 0 ? 0 : 1.2
+        stream += [[-3, -2.5], [3, -2], [-1.5, -4]]
+          .map(([dx, dy]) => `<circle cx="${DRAIN.x + (dx ?? 0)}" cy="${(DRAIN.y + (dy ?? 0) - up).toFixed(1)}" r="0.5" ${wet} fill-opacity="0.85"/>`)
           .join('')
       }
     }
   }
 
-  return { back: pool + pipe, front: bucket + over + stream }
+  return sink + stream
 }
-// Der Eimer in der Schere, solange Clawd ihn herbeiträgt.
-const carriedPail = crisp(px(28, 18, 5, 4, INK.concrete) + px(27.7, 17.5, 5.6, 0.8, INK.concreteTop)) +
-  `<path d="M28.5 17.8 Q 30.5 14.5 32.5 17.8" fill="none" stroke="${INK.concreteTop}" stroke-width="0.5"/>`
+
+// Clawd am Hahn: das Handy in der vorderen Schere, der Blick gesenkt. `comfort` 0 steht er,
+// 1 sitzt er auf dem Hocker, 2 liegt er im Liegestuhl, 3 dazu unterm Sonnenschirm mit Drink.
+const SCREEN = '#9FD8FF'
+function idlerPx(comfort: number, step: number, tick: number): string {
+  const lift = (i: number) => (step % 2 === 1 && i % 2 === 1 ? 1 : 0)
+  // Stehend vier Beine, auf dem Hocker baumeln zwei, im Liegestuhl sind sie angezogen.
+  const legs =
+    comfort === 0
+      ? [8, 12, 18, 22].map((x, i) => px(x, 22 - lift(i), 2, 4, INK.clay))
+      : comfort === 1
+        ? [px(10, 22, 2, 2.5, INK.clay), px(20, 22, 2, 2.5, INK.clay)]
+        : []
+  const body = crisp(
+    [
+      px(4, 15, 4, 4, INK.clay),
+      px(8, 12, 16, 10, INK.clay),
+      px(24, 15, 2, 3, INK.clay),
+      px(11, 15, 2, 1.2, INK.ink),
+      px(19, 15, 2, 1.2, INK.ink),
+      ...legs,
+      // Das Handy: dunkle Hülle, das Display leuchtet, eine Zeile scrollt durch.
+      px(25.6, 12, 2.8, 4.6, INK.boot),
+      px(26, 12.5, 2, 3.6, SCREEN),
+      px(26, 12.6 + (tick % 4) * 0.8, 2, 0.4, '#FFFFFF', ' fill-opacity="0.8"'),
+    ].join(''),
+  )
+  if (comfort === 0) return body
+  if (comfort === 1) {
+    // Holzhocker, Clawd sitzt eine Spur tiefer darauf.
+    return (
+      `<g transform="translate(0 2)">${body}</g>` +
+      crisp(px(6, 24.6, 20, 1.4, INK.wood) + px(7.5, 26, 1.4, GROUND - 26, INK.crust) + px(23.1, 26, 1.4, GROUND - 26, INK.crust))
+    )
+  }
+  // Liegestuhl: gestreifter Stoff zwischen schrägem Rücken und Sitz, Clawd lehnt sich hinein.
+  const chair =
+    `<path d="M4 13 L11 24.5 L28 24.5" fill="none" stroke="${INK.wood}" stroke-width="3.2" stroke-linejoin="round"/>` +
+    `<path d="M4 13 L11 24.5 L28 24.5" fill="none" stroke="${INK.red}" stroke-width="3.2" stroke-dasharray="1.6 1.6" stroke-linejoin="round"/>` +
+    `<path d="M11 24.5 L8 ${GROUND} M28 24.5 L28 ${GROUND} M6 16 L3 ${GROUND}" stroke="${INK.crust}" stroke-width="1"/>`
+  const lying = `<g transform="translate(3 3) rotate(-24 16 22)">${body}</g>`
+  if (comfort === 2) return chair + lying
+  // Sonnenschirm und ein Drink auf dem Beistelltisch.
+  const parasol =
+    `<path d="M2.5 4.5 L2.5 ${GROUND}" stroke="${INK.concrete}" stroke-width="0.9"/>` +
+    `<path d="M-9 9 Q 2.5 0.5 14 9 Z" fill="${INK.red}"/>` +
+    `<path d="M-1.5 8.6 Q 2.5 2.4 6.5 8.6 Z" fill="${INK.silver}"/>` +
+    `<path d="M-9 9 Q -6 10 -3.3 9 Q -0.6 10 2.5 9 Q 5.6 10 8.3 9 Q 11 10 14 9" fill="none" stroke="${INK.brim}" stroke-width="0.6"/>`
+  const drink =
+    crisp(px(29.5, 22.2, 5, 0.8, INK.wood) + px(31.5, 23, 1, GROUND - 23, INK.crust)) +
+    `<path d="M30 18 L34 18 L32 20.4 Z" fill="${SCREEN}" fill-opacity="0.85"/>` +
+    `<path d="M32 20.4 L32 22.2" stroke="${INK.glassEdge}" stroke-width="0.4"/>` +
+    `<path d="M32.6 18 L34.2 15.8" stroke="${INK.red}" stroke-width="0.4"/>` +
+    `<circle cx="30.3" cy="18" r="0.9" fill="${INK.orange}"/>`
+
+  return parasol + chair + lying + drink
+}
 
 // Die Wolke schwebt rechts über dem Schirm und wächst mit den Tokens in die Breite und in die
 // Höhe: unten ein flacher Bauch, oben Bäusche verschiedener Größe, der höchste in der Mitte. Im
@@ -1084,10 +1136,7 @@ export function sceneSvg(scene: Scene, colors: SceneColors): string {
 
   // Hinten und vorn die Szene, dazwischen Clawd.
   if (role === 'tap') {
-    const hasBucket = arrival < 0 || arrival >= ARRIVE.in
-    const drawn = tapSvg({ ...scene, water: isHere ? water : null }, colors, hasBucket)
-    back.push(drawn.back)
-    front.push(drawn.front)
+    back.push(sinkSvg({ ...scene, water: isHere ? water : null }, colors, isTapOpen(arrival)))
   } else if (role === 'cloud') {
     back.push(cloudPuddleSvg(level, colors))
     const share = isHere ? 1 : arrival < ARRIVE.in ? 0 : (arrival - ARRIVE.in + 1) / ARRIVE.hold
@@ -1121,8 +1170,10 @@ export function sceneSvg(scene: Scene, colors: SceneColors): string {
     }
   } else if (arrival >= 0) {
     const walked = Math.min(1, arrival / ARRIVE.in)
-    const pail = role === 'tap' && arrival < ARRIVE.in ? carriedPail : ''
-    clawd = `<g transform="translate(${(-32 * (1 - walked)).toFixed(1)} 0)">${clawdPx(role, walked < 1 ? arrival : 0)}${pail}</g>`
+    const walker = role === 'tap' ? idlerPx(0, walked < 1 ? arrival : 0, tick) : clawdPx(role, walked < 1 ? arrival : 0)
+    clawd = `<g transform="translate(${(-32 * (1 - walked)).toFixed(1)} 0)">${walker}</g>`
+  } else if (role === 'tap') {
+    clawd = idlerPx(comfortOf(level), 0, tick)
   } else {
     clawd = clawdPx(role, 0, isGulping, role === 'thirst')
   }
@@ -1135,7 +1186,7 @@ export function sceneAlt(scene: Scene): string {
   const { role, water, arrival, stage, level } = scene
   if (arrival >= 0) {
     const arriving: Record<Role, string> = {
-      tap: 'plumber Clawd walking in with a bucket',
+      tap: 'Clawd walking in, eyes on the phone',
       cloud: 'Clawd walking in under an umbrella',
       cooling: 'fire truck arriving',
       thirst: 'cargo bike with water arriving',
@@ -1145,8 +1196,9 @@ export function sceneAlt(scene: Scene): string {
   }
   const isOn = water !== null
   if (role === 'tap') {
-    if (isOn) return scene.strength >= 2 ? 'plumber Clawd, the tap is running' : 'plumber Clawd, the tap is dripping'
-    return level >= 6 ? 'plumber Clawd next to the tap, the bucket overflows' : 'plumber Clawd next to the tap'
+    const where = ['next to the sink', 'on a stool', 'in a deck chair', 'in a deck chair under a parasol'][comfortOf(level)]
+    if (isOn) return `Clawd on the phone ${where}, the tap ${scene.strength >= 2 ? 'runs' : 'drips'} into the drain`
+    return `Clawd on the phone ${where}`
   }
   if (role === 'cooling') {
     if (isOn) return stage > 0 ? 'firefighter Clawd cooling the hot server, it steams' : 'firefighter Clawd cooling the server'

@@ -6,13 +6,15 @@ Daneben steht Clawd. KI trinkt Wasser: Rechenzentren verdunsten Kühlwasser, jed
 
 | Rolle | Tempo (Tokens pro Sekunde) | Größe (Tokens der Sitzung) |
 |---|---|---|
-| Hahn | Der Hahn tropft, tröpfelt, läuft, sprudelt | Eimer füllt sich, läuft über, die Pfütze wächst |
+| Hahn | Clawd dreht auf und scrollt am Handy, das Wasser läuft ungenutzt in den Abfluss; nur solange Tokens fließen | Je mehr Liter, desto bequemer: Hocker ab 1 L, Liegestuhl ab 5 L, Sonnenschirm mit Drink ab 20 L |
 | Cloud | Es regnet auf den Schirm, die Server in der Wolke blinken, bei Vollgas blitzt es | Wolke wird größer |
 | Kühlturm | Der Serverschrank wird heiß, Clawd kühlt ihn mit dem Schlauch, es dampft | Kühlwassertank leert sich |
 | Durst | Clawd gluckert aus der Flasche | Leere Flaschen stapeln sich |
 | See | Clawd schlürft mit dem Strohhalm, es blubbert | Der See trocknet aus, am Ende zappelt ein Fisch |
 
-Beim Start und nach 30 Minuten Pause kommt Clawd erst an (zu Fuß mit Eimer oder Schirm, im Feuerwehrauto, auf dem Lastenrad mit Wasserkiste oder im Ruderboot).
+Am Hahn steht neben dem Becken, wie viel Wasser verschwendet wurde, für den Zeitraum, den der Tokenzähler gerade zeigt. Gerechnet wird nach Mistrals Ökobilanz (2025) mit 45 ml pro 400 ausgegebenen Tokens; für 24h, 7d und 30d zählt der Mod ab Version 0.14.0 selbst mit, „all time“ kommt aus `/stats`.
+
+Beim Start und nach 30 Minuten Pause kommt Clawd erst an (zu Fuß mit Handy oder Schirm, im Feuerwehrauto, auf dem Lastenrad mit Wasserkiste oder im Ruderboot).
 
 ## Installieren
 

@@ -9,7 +9,7 @@
     {
       "name": "burn",
       "source": "./",
-      "description": "Dezente Leiste über dem Eingabefeld mit den Nutzungslimits wie /usage, per Klick durchschaltbar; daneben trinkt Clawd in einer ausgelosten Rolle Wasser mit (Hahn, Cloud, Kühlturm, Durst, See)"
+      "description": "Dezente Leiste über dem Eingabefeld mit den Nutzungslimits wie /usage, per Klick durchschaltbar; daneben trinkt Clawd in einer ausgelosten Rolle Wasser mit (Hahn mit Literanzeige, Cloud, Kühlturm, Durst, See)"
     }
   ]
 }

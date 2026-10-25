@@ -2,10 +2,11 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 import { axisLabel } from '../hooks/chart'
-import { FLOWS, ROLES, piecesText, sceneAlt, sceneSvg, terminalScene } from '../hooks/clawd'
+import { FLOWS, ML_PER_TOKEN, ROLES, literText, piecesText, sceneAlt, sceneSvg, tapLevel, terminalScene } from '../hooks/clawd'
 import type { Scene } from '../hooks/clawd'
-import { addTo, costFrom, liveTotals } from '../hooks/ledger'
+import { addTo, allOutput, costFrom, liveTotals } from '../hooks/ledger'
 import { modelName } from '../hooks/stats'
+import type { StatsCache } from '../hooks/stats'
 
 const BAND = {
   plugin: 'burn',
@@ -737,7 +738,9 @@ test('every job draws in the terminal and in the apps, and tempo and size change
       // Jede Stärke im zweiten Bild ihrer Folge, mitten im Fall oder Strahl.
       ...[0, 1, 2, 3].map(strength => draw({ ...rest, water: FLOWS[strength]?.[1] ?? null, strength, tick: 1, stage: strength + 1 })),
     ]
-    const sizes = (draw: (scene: Scene) => string) => [0, 3, 6, 10].map(level => draw({ ...rest, level }))
+    // Am Hahn hat die Größe nur vier Stufen: trocken, Stehen, Hocker, Liegestuhl, Sonnenschirm.
+    const levels = role === 'tap' ? [0, 2, 3, 4] : [0, 3, 6, 10]
+    const sizes = (draw: (scene: Scene) => string) => levels.map(level => draw({ ...rest, level }))
     for (const draw of [text, (scene: Scene) => sceneSvg(scene, colors)]) {
       expect({ role, tempo: new Set(pictures(draw)).size }).toEqual({ role, tempo: 5 })
       expect({ role, size: new Set(sizes(draw)).size }).toEqual({ role, size: 4 })
@@ -841,7 +844,7 @@ test('Clawd arrives at the start and again after half an hour without replies; t
   await ui.unmount()
 })
 
-test('every job arrives its own way: on foot with a bucket, cargo bike with water, rowboat on the lake', async ($, on) => {
+test('every job arrives its own way: on foot with the phone, cargo bike with water, rowboat on the lake', async ($, on) => {
   engine(on)
   const clock = mock.clock(on, { now: NOW })
 
@@ -865,16 +868,16 @@ test('every job arrives its own way: on foot with a bucket, cargo bike with wate
     await ui.unmount()
   }
 
-  // Zu Fuß: der Klempner trägt den Eimer herbei, der Hahn wartet schon; die Kappe setzt er erst dort auf.
+  // Zu Fuß: Clawd kommt mit dem Handy vor der Nase, Becken und Hahn warten schon; er dreht erst dort auf.
   await $.command.run({ command: 'clawd', args: 'wasserhahn' })
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   await clock.advance(5 * 120)
-  expect(await tapText(ui)).toBe('       ┻┓')
-  expect(await rowText(ui, 'clawd')).toMatch(/▐▛███▜▌ ▙▟/)
-  expect(await rowText(ui, 'beine')).not.toMatch(/▕/)
+  expect(await tapText(ui)).toBe('       ━┓')
+  expect(await rowText(ui, 'clawd')).toMatch(/▐▛███▜▌▮/)
+  expect(await rowText(ui, 'beine')).toMatch(/╲▁╱/)
   await clock.advance(ARRIVAL)
-  expect(await tapText(ui)).toBe(' ▄▆██▆▄┻┓')
-  expect(await rowText(ui, 'beine')).toMatch(/^ ▘▘ ▝▝ ▕▁▏/)
+  expect(await tapText(ui)).toBe('       ┻┓')
+  expect(await rowText(ui, 'beine')).toMatch(/^ ▘▘ ▝▝ ╲▁╱/)
   await ui.unmount()
 
   await $.command.run({ command: 'clawd', args: 'durst' })
@@ -1115,7 +1118,7 @@ test('the server heats up while a reply streams, steams under the hose and cools
   await cold.unmount()
 })
 
-test('plumber Clawd: the tap drips into the bucket, which overflows into a spreading puddle', async ($, on) => {
+test('at the tap Clawd scrolls the phone while the water runs into the drain, and lounges more with every liter', async ($, on) => {
   engine(on)
   const clock = mock.clock(on, { now: NOW })
 
@@ -1124,35 +1127,64 @@ test('plumber Clawd: the tap drips into the bucket, which overflows into a sprea
   await cast($, clock, 'hahn')
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
 
-  // Kappe und Hahn in der Leiste, darunter der leere Eimer; dicht ist der Hahn nie, ein Tropfen hängt.
-  expect(await tapText(ui)).toBe(' ▄▆██▆▄┻┓')
-  expect(await rowText(ui, 'clawd')).toMatch(/^▐▛███▜▌ ' +$/)
-  expect(await rowText(ui, 'beine')).toMatch(/^ ▘▘ ▝▝ ▕▁▏ +$/)
+  // Hahn offen über dem Becken, Clawd mit Handy; noch kein Wasser, also keine Liter.
+  expect(await tapText(ui)).toBe('       ┻┓')
+  expect(await rowText(ui, 'clawd')).toMatch(/^▐▛███▜▌▮ +$/)
+  expect(await rowText(ui, 'beine')).toMatch(/^ ▘▘ ▝▝ ╲▁╱ +$/)
+
+  // 1.000 ausgegebene Tokens sind 112,5 ml; die Eingabe zählt nicht.
   await step($, 300_000, 0, 1_000)
   await clock.advance(5_000)
-  expect(await rowText(ui, 'beine')).toMatch(/^ ▘▘ ▝▝ ▕▄▏ +$/)
+  expect(await rowText(ui, 'beine')).toMatch(/^ ▘▘ ▝▝ ╲▁╱ ≈ 113 ml +$/)
 
-  // Viel Tempo: der Hahn sprudelt, es spritzt aus dem Eimer.
+  // Ab 1 L sitzt er auf dem Hocker.
+  await step($, 0, 0, 10_000)
+  await clock.advance(5_000)
+  expect(await rowText(ui, 'beine')).toMatch(/^ ╤═══╤ ╲▁╱ ≈ 1,2 L +$/)
+
+  // Viel Tempo: der Strahl schießt in den Abfluss, dort strudelt es.
   usages.push({ model: 'claude-opus-5-5', input_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1_000 })
   const close = await openStream($)
   await clock.advance(10)
-  expect(await rowText(ui, 'clawd')).toMatch(/^▐▛███▜▌[ ˙][┃╏]/)
+  expect(await rowText(ui, 'clawd')).toMatch(/^▐▛███▜▌▮[┃╏]/)
+  expect(await rowText(ui, 'beine')).toMatch(/╲[◌○]╱/)
   await close()
   await clock.advance(DRAIN)
+  // Danach tropft nichts nach: der Hahn ist still.
+  expect(await rowText(ui, 'clawd')).toMatch(/^▐▛███▜▌▮ +$/)
 
-  // Ab 100m läuft er über, die Pfütze reicht weit nach rechts.
-  await step($, 100_000_000, 0, 1_000)
+  // Ab 20 L Liegestuhl unter dem Sonnenschirm, mit Drink.
+  await step($, 0, 0, 200_000)
   await clock.advance(5_000)
-  expect(await rowText(ui, 'beine')).toMatch(/^ ▘▘ ▝▝ ▕█▏▂▂▂▁▁▁▁▁ *$/)
+  expect(await tapText(ui)).toBe('▗▄▆█▆▄▖┻┓')
+  expect(await rowText(ui, 'clawd')).toMatch(/^▐▛███▜▌▮   ▿/)
+  expect(await rowText(ui, 'beine')).toMatch(/^╲▚▚▚▚▚╱╲▁╱ ≈ 2\d,\d L +$/)
   await ui.unmount()
 
   const app = await $.ui.mount({ ...BAND, surface: 'vscode' })
   const svg = await svgOf(app)
-  expect(svg?.props.alt).toBe('plumber Clawd next to the tap, the bucket overflows')
-  // Blaue Latzhose und Kappe, roter Griff am Hahn.
-  expect(String(svg?.props.source)).toContain('#4A6FA5')
+  expect(svg?.props.alt).toBe('Clawd on the phone in a deck chair under a parasol')
+  // Das Display leuchtet, der Hebel am Hahn ist rot; die Liter stehen neben dem Becken.
+  expect(String(svg?.props.source)).toContain('#9FD8FF')
   expect(String(svg?.props.source)).toContain('#C8372D')
+  expect(plain((await (app as unknown as Drawing).find({ type: 'Text', text: /≈/ }))?.text)).toMatch(/^ ≈ 2\d,\d L$/)
   await app.unmount()
+})
+
+test('liters follow Mistral: 45 ml per 400 output tokens, all time from /stats plus the own book after it', () => {
+  expect(literText(0)).toBe('')
+  expect(literText(340 * 1)).toBe('≈ 340 ml')
+  expect(literText(1_400)).toBe('≈ 1,4 L')
+  expect(literText(123_456)).toBe('≈ 123 L')
+  expect(1_000 * ML_PER_TOKEN).toBe(112.5)
+  expect([0, 1, 999, 1_000, 5_000, 20_000].map(tapLevel)).toEqual([0, 1, 1, 2, 3, 4])
+  const day = (ms: number) => Math.floor(ms / 86_400_000)
+  const before = Date.parse('2026-10-24T12:00:00Z')
+  const after = Date.parse('2026-10-25T12:00:00Z')
+  const book = addTo(addTo({ buckets: {}, archived: 0 }, before, 300, before), after, 50, after)
+  const cache = { lastComputedDate: '2026-10-24', modelUsage: { a: { outputTokens: 1_000 }, b: { outputTokens: 200 } } } as unknown as StatsCache
+  expect(allOutput(cache, [book], day)).toBe(1_250)
+  expect(allOutput(null, [book], day)).toBe(350)
 })
 
 test('in the cloud it rains with the tokens per second, the servers blink, and the cloud grows with the session', async ($, on) => {

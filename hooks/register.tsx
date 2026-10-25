@@ -9,7 +9,7 @@ import type {
 
 import type { ContextInfo, Reading, TokenTotals } from '../types'
 import { chartRows, chartSvg, dayLabel } from './chart'
-import { PREFIX, SPANS, START_KEY, addTo, costFrom, liveTotals } from './ledger'
+import { PREFIX, SPANS, START_KEY, addTo, allOutput, costFrom, liveTotals } from './ledger'
 import type { Ledger } from './ledger'
 import type { Series } from './chart'
 import {
@@ -22,8 +22,11 @@ import {
   SLOT,
   arrivalLength,
   isRestingAt,
+  ML_PER_TOKEN,
+  literText,
   sceneAlt,
   sceneSvg,
+  tapLevel,
   sizeLevel,
   stageOf,
   terminalScene,
@@ -150,6 +153,17 @@ const liveCost = atom(
   { session: 0, day: 0, week: 0, month: 0, all: 0 },
   { shape: 'live-cost-1' },
 )
+// Dasselbe nur für die ausgegebenen Tokens, daraus rechnet der Hahn die Liter (ab 25.10.2026).
+const OUT_PREFIX = 'out:'
+const OUT_KEY = `${OUT_PREFIX}${SESSION_ID}`
+let ownOut: Ledger = { buckets: {}, archived: 0 }
+const liveOut = atom(
+  { plugin: 'burn', key: 'liveOut' } as const,
+  { session: 0, day: 0, week: 0, month: 0, all: 0 },
+  { shape: 'live-out-1' },
+)
+// So breit stehen die Liter höchstens da, damit die Leiste beim Hochzählen nicht umbricht.
+const LITER_WIDTH = ' ≈ 00,0 L'.length
 
 const PANE = 'statistik'
 const PANE_TITLE = 'Usage'
@@ -691,6 +705,10 @@ async function refreshLive($: EngineInterface) {
   // Kosten kennt /stats nicht: sie zählen ab dem ersten Eintrag des Mods.
   const cost = liveTotals(costs, start, null, lastCostUsd, nowMs, berlinDay)
   await update($, liveCost, () => cost)
+  const outs = await ledgersOf($, OUT_PREFIX, OUT_KEY, ownOut)
+  const out = liveTotals(outs, start, null, totals.output, nowMs, berlinDay)
+  const all = allOutput(await readCache($), outs, berlinDay)
+  await update($, liveOut, () => ({ ...out, all }))
 }
 
 export const register: Register = on => {
@@ -849,8 +867,10 @@ export const register: Register = on => {
       isSettling = true
       grow($, amount + withdrawn)
       ownLedger = addTo(ownLedger, at, amount, at)
+      ownOut = addTo(ownOut, at, used.output_tokens, at)
       try {
         await $.store.set(LEDGER_KEY, ownLedger)
+        await $.store.set(OUT_KEY, ownOut)
         await track($, at)
         await refreshLive($).catch(() => undefined)
       } finally {
@@ -1600,12 +1620,19 @@ export const register: Register = on => {
     const strength = Math.max(0, flowAt)
     const frames = FLOWS[strength] ?? FLOWS[0] ?? [RESTING]
     const water = isDripping ? (frames[(await read($, drip)) % frames.length] ?? RESTING) : null
+    const roleAt = ROLES[(await read($, role)) % ROLES.length] ?? 'tap'
+    // Am Hahn: die Liter wie der Zähler (Session, 24h, ...), die Bequemlichkeit nach der Sitzung.
+    const isTap = roleAt === 'tap'
+    const outs = await read($, liveOut)
+    const sessionOut = (await read($, tokens)).output + inFlight
+    const liters = isTap ? literText((outs[span.key] + inFlight) * ML_PER_TOKEN) : ''
     const scene = {
-      role: ROLES[(await read($, role)) % ROLES.length] ?? 'tap',
+      role: roleAt,
       water,
       strength,
       tick: await read($, drip),
-      level: sizeLevel(Math.max(0, totals.session + inFlight - behindBy)),
+      level: isTap ? tapLevel(sessionOut * ML_PER_TOKEN) : sizeLevel(Math.max(0, totals.session + inFlight - behindBy)),
+      liters,
       stage: stageOf(await read($, heat)),
       flicker: (await read($, flicker)) + (isDripping ? await read($, drip) : 0),
       arrival: arrivalAt,
@@ -1669,10 +1696,18 @@ export const register: Register = on => {
         </Box>
       )
     }
-    const livePart = (hasTap: boolean, withMoney = true) => [
+    // In den Apps stehen die Liter neben dem Becken, im Terminal zeichnet sie die Szene.
+    const literPart =
+      !isTerminal && isTap ? (
+        <Text key="liter" size="footnote" color="suggestion" dimColor tabular>
+          {nb(liters === '' ? '' : ` ${liters}`)}
+        </Text>
+      ) : null
+    const livePart = (hasTap: boolean, withMoney = true, withLiters = true) => [
       <Box flexGrow={1} />,
       <Text>{nb(hasTap ? ' ' : '   ')}</Text>,
       hasTap ? tapPart : null,
+      hasTap && withLiters ? literPart : null,
       hasTap ? <Text>{nb(' ')}</Text> : null,
       <Button
         key="live"
@@ -1699,20 +1734,22 @@ export const register: Register = on => {
     // Die Apps, desktop und vscode gleich und nur nach der Breite: erst fallen die Details weg,
     // dann rückt der Zähler mit Clawd unter die Limits, dann geht dort der Preis. Clawd tritt
     // erst beiseite, wenn auch das nicht passt. Das Terminal rechnet weiter wie unten.
-    type AppPlan = { detail: string | undefined; hasTap: boolean; isStacked: boolean; withMoney: boolean }
+    // Die Liter am Hahn kommen nur dazu, wo sie noch Platz haben; für sie tritt Clawd nicht beiseite.
+    type AppPlan = { detail: string | undefined; hasTap: boolean; isStacked: boolean; withMoney: boolean; withLiters: boolean }
     const appRoom = e.props.bodyColumns - 1
-    const appLive = (hasTap: boolean, withMoney: boolean) =>
-      appText((hasTap ? 2 : 3) + liveRoomOf(withMoney)) + (hasTap ? appCells(SCENE_SVG.width) : 0)
+    const appLive = (hasTap: boolean, withMoney: boolean, withLiters = false) =>
+      appText((hasTap ? 2 : 3) + liveRoomOf(withMoney) + (withLiters ? LITER_WIDTH : 0)) +
+      (hasTap ? appCells(SCENE_SVG.width) : 0)
     const appPlan = (left: (detail: string | undefined) => number, details: string[]): AppPlan => {
       const options = [...details, undefined]
-      const fits = (detail: string | undefined, withMoney: boolean, isStacked: boolean) =>
+      const fits = (detail: string | undefined, withMoney: boolean, isStacked: boolean, withLiters = false) =>
         isStacked
-          ? left(detail) <= appRoom && appLive(true, withMoney) <= appRoom
-          : left(detail) + appLive(true, withMoney) <= appRoom
+          ? left(detail) <= appRoom && appLive(true, withMoney, withLiters) <= appRoom
+          : left(detail) + appLive(true, withMoney, withLiters) <= appRoom
       for (const [isStacked, withMoney] of [[false, true], [true, true], [true, false]] as const) {
         const detail = options.find(d => fits(d, withMoney, isStacked))
         if (detail !== undefined || fits(undefined, withMoney, isStacked)) {
-          return { detail, hasTap: true, isStacked, withMoney }
+          return { detail, hasTap: true, isStacked, withMoney, withLiters: isTap && fits(detail, withMoney, isStacked, true) }
         }
       }
 
@@ -1721,6 +1758,7 @@ export const register: Register = on => {
         hasTap: false,
         isStacked: true,
         withMoney: appLive(false, true) <= appRoom,
+        withLiters: false,
       }
     }
     // Eine Zeile, oder die Limits oben und darunter rechtsbündig Clawd mit dem Zähler.
@@ -1729,13 +1767,13 @@ export const register: Register = on => {
         <Box flexDirection="column">
           {limits}
           <Box flexDirection="row" alignItems="center">
-            {livePart(plan.hasTap, plan.withMoney)}
+            {livePart(plan.hasTap, plan.withMoney, plan.withLiters)}
           </Box>
         </Box>
       ) : (
         <Box flexDirection="row" alignItems="center">
           {limits}
-          {livePart(plan.hasTap, plan.withMoney)}
+          {livePart(plan.hasTap, plan.withMoney, plan.withLiters)}
         </Box>
       )
 

@@ -8,7 +8,7 @@ import { addTo, costFrom, liveTotals } from '../hooks/ledger'
 import { modelName } from '../hooks/stats'
 
 const BAND = {
-  plugin: 'nutzung',
+  plugin: 'burn',
   component: 'AbovePrompt',
   props: {
     hasSurvey: false,
@@ -134,7 +134,7 @@ const plain = (text: string | undefined) => (text ?? '').replace(/ /g, ' ')
 // Die Zeile, dahinter der Knopf zum Weiterschalten.
 const text = async (ui: Drawing) => {
   const line = (await ui.find({ type: 'Text', text: /^✻/ }))?.text
-  const button = (await ui.find({ key: 'nutzung' }))?.text
+  const button = (await ui.find({ key: 'burn' }))?.text
 
   return plain(`${line ?? ''}${button ?? ''}`)
 }
@@ -152,11 +152,11 @@ test('the bar cycles session, week and tokens, on every surface', async ($, on) 
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   expect(await ui.find({ type: 'Text', text: /▝▜█████▛▘/ })).toBeUndefined()
   expect(await text(ui)).toBe('✻ Session  ████████ 34% used  ·  Resets 6:40pm (in 58m)   1/3 ›')
-  await ui.press({ key: 'nutzung' })
+  await ui.press({ key: 'burn' })
   expect(await text(ui)).toBe(
     '✻ Week  ████████ 13% used  ·  Resets Oct 27 at 9:00am (in 3d 16h)   2/3 ›',
   )
-  await ui.press({ key: 'nutzung' })
+  await ui.press({ key: 'burn' })
   expect(await text(ui)).toBe(
     '✻ Context  ████████ 56.3k / 200.0k  ·  ↑ 1.2m in  ↓ 45.1k out   3/3 ›',
   )
@@ -244,7 +244,7 @@ test('/tokens hides the bar and shows it again', async ($, on) => {
 
   expect(await $.command.run({ command: 'tokens' })).toMatchObject({ text: 'Usage bar hidden.' })
   const hidden = await $.ui.mount({ ...BAND, surface: 'terminal' })
-  expect(await hidden.find({ key: 'nutzung' })).toBeUndefined()
+  expect(await hidden.find({ key: 'burn' })).toBeUndefined()
   await hidden.unmount()
 
   expect(await $.command.run({ command: 'tokens' })).toMatchObject({ text: 'Usage bar shown.' })
@@ -305,7 +305,7 @@ const CACHE = {
 }
 
 const PANE = {
-  plugin: 'nutzung',
+  plugin: 'burn',
   component: 'Pane',
   requestId: 'statistik',
   props: {
@@ -487,8 +487,8 @@ test('Context breaks the window down like /context and the bar counts to auto-co
   await $.session.measure(measure)
 
   const band = await $.ui.mount({ ...BAND, props: { ...BAND.props, bodyColumns: 140 }, surface: 'terminal' })
-  await band.press({ key: 'nutzung' })
-  await band.press({ key: 'nutzung' })
+  await band.press({ key: 'burn' })
+  await band.press({ key: 'burn' })
   expect(await text(band)).toContain('110.7k to auto-compact')
   await band.unmount()
 

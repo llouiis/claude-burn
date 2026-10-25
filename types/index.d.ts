@@ -41,7 +41,7 @@ export type ContextInfo = {
 
 declare module 'claude-code' {
   interface PluginState {
-    nutzung: {
+    burn: {
       reading: Shaped<Reading | null>
       tokens: Shaped<TokenTotals>
       startedAt: number

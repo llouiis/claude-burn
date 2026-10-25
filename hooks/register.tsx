@@ -35,34 +35,34 @@ import type { StatsCache } from './stats'
 
 // Tag ändern, wenn sich die Felder ändern: Werte einer älteren Fassung
 // überstehen ein Neuladen und würden sonst falsch gelesen.
-const reading = atom({ plugin: 'nutzung', key: 'reading' } as const, null, {
+const reading = atom({ plugin: 'burn', key: 'reading' } as const, null, {
   shape: 'reading-3',
 })
 const tokens = atom(
-  { plugin: 'nutzung', key: 'tokens' } as const,
+  { plugin: 'burn', key: 'tokens' } as const,
   { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   { shape: 'tokens-2' },
 )
-const startedAt = atom({ plugin: 'nutzung', key: 'startedAt' } as const, 0)
-const now = atom({ plugin: 'nutzung', key: 'now' } as const, 0)
-const view = atom({ plugin: 'nutzung', key: 'view' } as const, 0)
-const isHidden = atom({ plugin: 'nutzung', key: 'isHidden' } as const, false)
-const range = atom({ plugin: 'nutzung', key: 'range' } as const, 0)
+const startedAt = atom({ plugin: 'burn', key: 'startedAt' } as const, 0)
+const now = atom({ plugin: 'burn', key: 'now' } as const, 0)
+const view = atom({ plugin: 'burn', key: 'view' } as const, 0)
+const isHidden = atom({ plugin: 'burn', key: 'isHidden' } as const, false)
+const range = atom({ plugin: 'burn', key: 'range' } as const, 0)
 // 0 Usage, 1 Stats › Overview, 2 Stats › Models
-const tab = atom({ plugin: 'nutzung', key: 'tab' } as const, 0)
+const tab = atom({ plugin: 'burn', key: 'tab' } as const, 0)
 const live = atom(
-  { plugin: 'nutzung', key: 'live' } as const,
+  { plugin: 'burn', key: 'live' } as const,
   { session: 0, day: 0, week: 0, month: 0, all: 0 },
   { shape: 'live-1' },
 )
-const liveSpan = atom({ plugin: 'nutzung', key: 'liveSpan' } as const, 0)
+const liveSpan = atom({ plugin: 'burn', key: 'liveSpan' } as const, 0)
 // Geschätzte Ausgabe der Modellaufrufe, die gerade streamen (Zeichen / 4 wie der Spinner).
-const streamed = atom({ plugin: 'nutzung', key: 'streamed' } as const, 0)
+const streamed = atom({ plugin: 'burn', key: 'streamed' } as const, 0)
 // Wie weit die Anzeige rechts dem echten Stand hinterherläuft; der Takt baut das ab.
-const lag = atom({ plugin: 'nutzung', key: 'lag' } as const, 0)
+const lag = atom({ plugin: 'burn', key: 'lag' } as const, 0)
 // Helles Theme: die Svg der Apps nehmen dann die helle Palette.
-const isLight = atom({ plugin: 'nutzung', key: 'isLight' } as const, false)
-const context = atom({ plugin: 'nutzung', key: 'context' } as const, null as ContextInfo | null, {
+const isLight = atom({ plugin: 'burn', key: 'isLight' } as const, false)
+const context = atom({ plugin: 'burn', key: 'context' } as const, null as ContextInfo | null, {
   shape: 'context-1',
 })
 let contextAt = 0
@@ -108,16 +108,16 @@ const APP_CELL_PX = 7
 const appCells = (px: number) => Math.ceil(px / APP_CELL_PX)
 // Text in footnote ist dort proportional und schmaler als eine Zelle der Code-Schrift.
 const appText = (chars: number) => Math.ceil(chars * 0.85)
-const drip = atom({ plugin: 'nutzung', key: 'drip' } as const, 0)
+const drip = atom({ plugin: 'burn', key: 'drip' } as const, 0)
 // -1 zugedreht, sonst die Stufe wie flowNow; Wasser zeigt die Szene nur, solange es läuft.
-const flow = atom({ plugin: 'nutzung', key: 'flow' } as const, -1)
+const flow = atom({ plugin: 'burn', key: 'flow' } as const, -1)
 let dripper: { cancel: () => void } | undefined
 // Die Rolle, einmal pro Sitzung ausgelost; /clawd wechselt sie von Hand.
-const role = atom({ plugin: 'nutzung', key: 'role' } as const, 0)
+const role = atom({ plugin: 'burn', key: 'role' } as const, 0)
 let roleNow = 0
 // Die Anfahrt: Takt seit Beginn, -1 ist angekommen. Sie kommt beim Start und wenn so lange
 // nichts gestreamt wurde; das Wasser wartet, bis Clawd an seinem Platz steht.
-const arrival = atom({ plugin: 'nutzung', key: 'arrival' } as const, -1)
+const arrival = atom({ plugin: 'burn', key: 'arrival' } as const, -1)
 const ARRIVE_TICK = 120
 const PAUSE = 30 * 60_000
 let arrivalNow = -1
@@ -125,8 +125,8 @@ let arriver: { cancel: () => void } | undefined
 let lastActive = 0
 // Der Serverschrank im Kühlturm: beim Streamen wird er heiß, in der Pause kühlt er langsam ab;
 // `flicker` lässt dabei die Hitze über ihm flimmern.
-const heat = atom({ plugin: 'nutzung', key: 'heat' } as const, 0)
-const flicker = atom({ plugin: 'nutzung', key: 'flicker' } as const, 0)
+const heat = atom({ plugin: 'burn', key: 'heat' } as const, 0)
+const flicker = atom({ plugin: 'burn', key: 'flicker' } as const, 0)
 const COOL = 1_000
 const COOL_STEP = 3
 let heatNow = 0
@@ -146,7 +146,7 @@ const COST_KEY = `${COST_PREFIX}${SESSION_ID}`
 let ownCost: Ledger = { buckets: {}, archived: 0 }
 let lastCostUsd = 0
 const liveCost = atom(
-  { plugin: 'nutzung', key: 'liveCost' } as const,
+  { plugin: 'burn', key: 'liveCost' } as const,
   { session: 0, day: 0, week: 0, month: 0, all: 0 },
   { shape: 'live-cost-1' },
 )
@@ -1807,7 +1807,7 @@ export const register: Register = on => {
     const controls = [
       position !== '' && (
         <Button
-          key="nutzung"
+          key="burn"
           plain
           dimColor
           autoFocus

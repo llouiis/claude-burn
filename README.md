@@ -1,4 +1,4 @@
-# Nutzung – Clawd-Leiste für Claude Code
+# Burn – Clawd-Leiste für Claude Code
 
 Ein Mod für Claude Code: eine dezente Leiste über dem Eingabefeld mit deinen Nutzungslimits wie in `/usage` (Session, Woche, Kontext), per Klick durchschaltbar, rechts ein Live-Tokenzähler mit Kosten.
 
@@ -17,11 +17,11 @@ Beim Start und nach 30 Minuten Pause kommt Clawd erst an (zu Fuß mit Eimer oder
 ## Installieren
 
 ```bash
-claude plugin marketplace add llouiis/claude-nutzung
+claude plugin marketplace add llouiis/claude-burn
 ```
 
 ```bash
-claude plugin install nutzung@claude-nutzung
+claude plugin install burn@claude-burn
 ```
 
 Danach Claude Code neu starten.
@@ -29,11 +29,11 @@ Danach Claude Code neu starten.
 ## Updates holen
 
 ```bash
-claude plugin marketplace update claude-nutzung
+claude plugin marketplace update claude-burn
 ```
 
 ```bash
-claude plugin update nutzung@claude-nutzung
+claude plugin update burn@claude-burn
 ```
 
 Danach Claude Code neu starten.

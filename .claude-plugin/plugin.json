@@ -1,13 +1,13 @@
 {
-  "name": "nutzung",
-  "version": "0.12.0",
+  "name": "burn",
+  "version": "0.13.0",
   "description": "Dezente Leiste über dem Eingabefeld mit den Nutzungslimits wie /usage, per Klick durchschaltbar; daneben trinkt Clawd in einer ausgelosten Rolle Wasser mit (Hahn, Cloud, Kühlturm, Durst, See)",
   "types": "./types/index.d.ts",
   "author": {
     "name": "Louis",
     "url": "https://github.com/llouiis"
   },
-  "homepage": "https://github.com/llouiis/claude-nutzung",
-  "repository": "https://github.com/llouiis/claude-nutzung",
+  "homepage": "https://github.com/llouiis/claude-burn",
+  "repository": "https://github.com/llouiis/claude-burn",
   "license": "MIT"
 }

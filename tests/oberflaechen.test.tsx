@@ -8,7 +8,7 @@ import { SCENE_SVG } from '../hooks/clawd'
 // desktop und vscode zeichnen bei gleicher Breite dasselbe.
 
 const BAND = {
-  plugin: 'nutzung',
+  plugin: 'burn',
   component: 'AbovePrompt',
   props: {
     hasSurvey: false,
@@ -21,7 +21,7 @@ const BAND = {
 } as const
 
 const PANE = {
-  plugin: 'nutzung',
+  plugin: 'burn',
   component: 'Pane',
   requestId: 'statistik',
   props: {

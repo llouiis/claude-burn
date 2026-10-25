@@ -1,13 +1,13 @@
 {
-  "name": "claude-nutzung",
-  "description": "Clawd-Nutzungsleiste für Claude Code",
+  "name": "claude-burn",
+  "description": "Burn: Clawd-Verbrauchsleiste für Claude Code",
   "owner": {
     "name": "Louis",
     "url": "https://github.com/llouiis"
   },
   "plugins": [
     {
-      "name": "nutzung",
+      "name": "burn",
       "source": "./",
       "description": "Dezente Leiste über dem Eingabefeld mit den Nutzungslimits wie /usage, per Klick durchschaltbar; daneben trinkt Clawd in einer ausgelosten Rolle Wasser mit (Hahn, Cloud, Kühlturm, Durst, See)"
     }

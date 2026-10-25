@@ -1,7 +1,7 @@
 {
   "name": "burn",
-  "version": "0.14.0",
-  "description": "Dezente Leiste über dem Eingabefeld mit den Nutzungslimits wie /usage, per Klick durchschaltbar; daneben trinkt Clawd in einer ausgelosten Rolle Wasser mit (Hahn mit Literanzeige, Cloud, Kühlturm, Durst, See)",
+  "version": "0.15.0",
+  "description": "Dezente Leiste über dem Eingabefeld mit den Nutzungslimits wie /usage, per Klick durchschaltbar; daneben verschwendet Clawd in einer ausgelosten Rolle Wasser, mit Literanzeige (Hahn, Dusche, Pool, Wanne, See)",
   "types": "./types/index.d.ts",
   "author": {
     "name": "Louis",

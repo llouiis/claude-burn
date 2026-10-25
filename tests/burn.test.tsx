@@ -676,8 +676,9 @@ test('the cost note shortens to one line once every span is tracked', async ($, 
 })
 
 // Clawd neben dem Preis: Kopf in der Leiste, darunter zwei Zeilen, rechts davon die Szene.
-const HELMET = '▂▄▆██▆▖  '
-const BODY = '▐▛███▜▌━╾'
+// Am Pool: Clawd mit Sonnenbrille und Schlauch, die Leiste darüber bleibt leer.
+const HEADLESS = ' '.repeat(9)
+const SHADES = '▐▀▀█▀▀▌━╾'
 const tapText = async (ui: Drawing) => {
   const found = await ui.find({ type: 'Box', key: 'hahn' })
 
@@ -685,7 +686,9 @@ const tapText = async (ui: Drawing) => {
 }
 const rowText = async (ui: Drawing, key: string) => plain((await ui.find({ key }))?.text)
 const sprayText = async (ui: Drawing) => plain((await ui.find({ key: 'strahl' }))?.text).trimEnd()
-const puddleText = async (ui: Drawing) => plain((await ui.find({ key: 'pfuetze' }))?.text).trimEnd()
+// Die zweite Zeile ohne die Liter, die rechtsbündig darunter stehen.
+const puddleText = async (ui: Drawing) =>
+  plain((await ui.find({ key: 'pfuetze' }))?.text).replace(/ *≈ [\d.,]+ (ml|L)$/, '').trimEnd()
 const DROPS = /^[˙·.]?$/
 // Die Anfahrt dauert knapp drei Sekunden.
 const ARRIVAL = 3_000
@@ -720,10 +723,8 @@ async function openStream($: Engine, chars = 4_000) {
   }
 }
 
-// Im Kühlturm reicht der Strahl bis vor den Serverschrank; dahinter stehen Schrank und Tank.
-const RACK = 6
-const hoseText = async (ui: Drawing) => (await sprayText(ui)).slice(0, RACK).trimEnd()
-const RACK_ROW = '▐▪▪▌'
+// Am Pool fliegt der Strahl höchstens sechs Spalten weit.
+const hoseText = async (ui: Drawing) => (await sprayText(ui)).slice(0, 6).trimEnd()
 
 test('every job draws in the terminal and in the apps, and tempo and size change the picture', () => {
   const colors = { suggestion: '#B1B9F9', gray: '#B0AEA5' }
@@ -732,11 +733,11 @@ test('every job draws in the terminal and in the apps, and tempo and size change
     return [drawn.head, ...drawn.rows.flatMap(row => [row.slot, row.right])].map(piecesText).join('|')
   }
   for (const role of ROLES) {
-    const rest: Scene = { role, water: null, strength: 0, tick: 0, level: 0, stage: 0, flicker: 0, arrival: -1 }
+    const rest: Scene = { role, water: null, strength: 0, tick: 0, level: 0, arrival: -1 }
     const pictures = (draw: (scene: Scene) => string) => [
       draw(rest),
       // Jede Stärke im zweiten Bild ihrer Folge, mitten im Fall oder Strahl.
-      ...[0, 1, 2, 3].map(strength => draw({ ...rest, water: FLOWS[strength]?.[1] ?? null, strength, tick: 1, stage: strength + 1 })),
+      ...[0, 1, 2, 3].map(strength => draw({ ...rest, water: FLOWS[strength]?.[1] ?? null, strength, tick: 1 })),
     ]
     // Am Hahn hat die Größe nur vier Stufen: trocken, Stehen, Hocker, Liegestuhl, Sonnenschirm.
     const levels = role === 'tap' ? [0, 2, 3, 4] : [0, 3, 6, 10]
@@ -760,20 +761,20 @@ test('every job draws in the terminal and in the apps, and tempo and size change
   }
 })
 
-test('Clawd at the cooling tower stands next to the price and sprays only while a reply streams', async ($, on) => {
+test('Clawd at the pool stands next to the price and sprays only while a reply streams', async ($, on) => {
   engine(on)
   const clock = mock.clock(on, { now: NOW })
 
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await $.session.measure(measure)
-  await cast($, clock, 'cooling')
+  await cast($, clock, 'pool')
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
 
-  // Zugedreht: Clawd mit Helm, ohne Wasser, der Schrank kalt, der Tank voll, auch wenn die Zeit vergeht.
-  expect(await tapText(ui)).toBe(HELMET)
-  expect(await rowText(ui, 'clawd')).toMatch(/^▐▛███▜▌━╾ {6}▐▪▪▌ {2}▕█▏ +$/)
+  // Zugedreht: Clawd mit Sonnenbrille, ohne Wasser, der Pool leer, auch wenn die Zeit vergeht.
+  expect(await tapText(ui)).toBe(HEADLESS)
+  expect(await rowText(ui, 'clawd')).toMatch(/^▐▀▀█▀▀▌━╾ +$/)
   expect(await hoseText(ui)).toBe('')
-  expect(await puddleText(ui)).toBe(`      ${RACK_ROW}  ▕█▏`)
+  expect(await puddleText(ui)).toBe('▁▁▁▁▁▁▁▁▁▁▏')
   await clock.advance(2_000)
   expect(await hoseText(ui)).toBe('')
 
@@ -781,7 +782,7 @@ test('Clawd at the cooling tower stands next to the price and sprays only while 
   const close = await openStream($, 40)
   await clock.advance(10)
   expect(plain(await liveText(ui))).toMatch(/↓/)
-  // Wenige Tokens pro Sekunde: ein Tropfen fällt in drei Bildern vom Strahlrohr, schlägt auf, dann eine Pause.
+  // Wenige Tokens pro Sekunde: ein Tropfen fällt in drei Bildern von der Düse, schlägt auf, dann eine Pause.
   const frames: string[] = []
   const floors: string[] = []
   for (let i = 0; i < 10; i += 1) {
@@ -793,7 +794,7 @@ test('Clawd at the cooling tower stands next to the price and sprays only while 
   }
   expect(frames.slice(0, 5)).toEqual(['˙', '·', '.', '', ''])
   expect(frames.slice(5)).toEqual(frames.slice(0, 5))
-  // Beim Aufschlag spritzt es vor dem Schrank.
+  // Beim Aufschlag spritzt es im Pool.
   expect(floors[3]).toMatch(/^,/)
 
   await close()
@@ -809,20 +810,16 @@ test('Clawd arrives at the start and again after half an hour without replies; t
 
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await $.session.measure(measure)
-  await $.command.run({ command: 'clawd', args: 'kühlturm' })
+  await $.command.run({ command: 'clawd', args: 'gartenschlauch' })
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
 
-  // Das Feuerwehrauto fährt von links heran, Clawd sitzt noch drin.
-  expect((await tapText(ui))?.trim()).toBe('')
+  // Clawd läuft mit dem aufgerollten Schlauch von links heran, der Pool wartet schon.
   await clock.advance(5 * 120)
-  expect(await rowText(ui, 'clawd')).toMatch(/╤╤╤╤╤╕▝█▙/)
-  expect(await rowText(ui, 'beine')).toMatch(/█●████●██/)
-  // Es hält, Clawds Helm schaut über das Dach, dann fährt es weiter.
-  await clock.advance(7 * 120)
-  expect(await tapText(ui)).toBe(HELMET)
+  expect(await rowText(ui, 'clawd')).toMatch(/▐▛███▜▌◎/)
+  expect(await rowText(ui, 'beine')).toMatch(/▕▁+▏/)
   await clock.advance(ARRIVAL)
-  expect(await rowText(ui, 'clawd')).toMatch(/^▐▛███▜▌━╾/)
-  expect(await rowText(ui, 'clawd')).not.toMatch(/●|▙/)
+  expect(await rowText(ui, 'clawd')).toMatch(/^▐▀▀█▀▀▌━╾/)
+  expect(await rowText(ui, 'clawd')).not.toMatch(/◎/)
 
   // Eine Antwort gleich danach: kein neuer Auftritt, das Wasser läuft sofort.
   usages.push({ model: 'claude-opus-5-5', input_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1_000 })
@@ -831,37 +828,34 @@ test('Clawd arrives at the start and again after half an hour without replies; t
   expect(await hoseText(ui)).toMatch(/^[━╍]{5}┓/)
   await close()
 
-  // Nach 31 Minuten Ruhe kommt er erst wieder angefahren, bevor er spritzt.
+  // Nach 31 Minuten Ruhe kommt er erst wieder an, bevor er spritzt.
   await clock.advance(31 * 60_000)
   usages.push({ model: 'claude-opus-5-5', input_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1_000 })
   close = await openStream($)
-  await clock.advance(10)
-  expect((await tapText(ui))?.trim()).toBe('')
+  await clock.advance(5 * 120)
+  expect(await rowText(ui, 'clawd')).toMatch(/◎/)
   expect(await sprayText(ui)).not.toMatch(/[━╍]/)
   await clock.advance(ARRIVAL)
-  expect(await tapText(ui)).toBe(HELMET)
+  expect(await rowText(ui, 'clawd')).toMatch(/^▐▀▀█▀▀▌━╾/)
   await close()
   await ui.unmount()
 })
 
-test('every job arrives its own way: on foot with the phone, cargo bike with water, rowboat on the lake', async ($, on) => {
+test('every job arrives its own way: on foot with phone, towel or hose, by rowboat to the lake', async ($, on) => {
   engine(on)
   const clock = mock.clock(on, { now: NOW })
 
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await $.session.measure(measure)
   // Halb angefahren: oben und unten je neun Spalten Fahrzeug.
-  const halfway: [string, RegExp, RegExp][] = [
-    ['flasche', /▬╮ ┃╻╻╻/, /\(●\)╳┻███●/],
-    ['see', /──▄▄▄▄▄▄▖/, /~ ▜████▛≈/],
-  ]
+  const halfway: [string, RegExp, RegExp][] = [['see', /──▄▄▄▄▄▄▖/, /~ ▜████▛≈/]]
   for (const [role, top, low] of halfway) {
     await $.command.run({ command: 'clawd', args: role })
     const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
     await clock.advance(5 * 120)
     expect(await rowText(ui, 'clawd')).toMatch(top)
     expect(await rowText(ui, 'beine')).toMatch(low)
-    // Flasche und Strohhalm kommen erst mit Clawd, nicht vor ihm.
+    // Der Strohhalm kommt erst mit Clawd, nicht vor ihm.
     expect(await rowText(ui, 'clawd')).not.toMatch(/▆▆▌|━┓/)
     await clock.advance(ARRIVAL)
     expect(await rowText(ui, 'beine')).not.toMatch(/●\)|▜████▛/)
@@ -880,9 +874,14 @@ test('every job arrives its own way: on foot with the phone, cargo bike with wat
   expect(await rowText(ui, 'beine')).toMatch(/^ ▘▘ ▝▝ ╲▁╱/)
   await ui.unmount()
 
-  await $.command.run({ command: 'clawd', args: 'durst' })
+  // Zur Dusche und zur Wanne mit dem Handtuch.
+  await $.command.run({ command: 'clawd', args: 'wanne' })
+  const towel = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await clock.advance(5 * 120)
+  expect(await rowText(towel, 'clawd')).toMatch(/▐▛███▜▌▬/)
+  await towel.unmount()
   const app = await $.ui.mount({ ...BAND, surface: 'vscode' })
-  expect((await svgOf(app))?.props.alt).toBe('cargo bike with water arriving')
+  expect((await svgOf(app))?.props.alt).toBe('Clawd walking in with a towel')
   await app.unmount()
 })
 
@@ -892,7 +891,7 @@ test('the more tokens per second stream in, the further the hose sprays', async 
 
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await $.session.measure(measure)
-  await cast($, clock, 'cooling')
+  await cast($, clock, 'pool')
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
 
   // 1000 Tokens auf einmal: über zwei Sekunden 500 pro Sekunde, ein starker Strahl, dessen Striche wandern.
@@ -919,7 +918,7 @@ test('the more tokens per second stream in, the further the hose sprays', async 
   const middle = await openStream($, 1_200)
   await clock.advance(10)
   const hose = await svgOf(app)
-  expect(hose?.props.alt).toMatch(/^firefighter Clawd cooling the/)
+  expect(hose?.props.alt).toMatch(/^Clawd in sunglasses filling the pool/)
   // 300 Tokens: 150 pro Sekunde, ein dünner Strahl.
   expect(String(hose?.props.source)).toContain('stroke-width="1.2"')
   expect(String(hose?.props.source)).toContain('stroke-dasharray')
@@ -933,7 +932,7 @@ test('after a reply the water runs out instead of stopping: the jet thins, the l
 
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await $.session.measure(measure)
-  await cast($, clock, 'cooling')
+  await cast($, clock, 'pool')
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
 
   usages.push({ model: 'claude-opus-5-5', input_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1_000 })
@@ -961,22 +960,22 @@ test('after a reply the water runs out instead of stopping: the jet thins, the l
   usages.push({ model: 'claude-opus-5-5', input_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1_000 })
   again = await openStream($)
   await clock.advance(10)
-  expect(await tapText(ui)).toBe(HELMET)
+  expect(await rowText(ui, 'clawd')).toMatch(/^▐▀▀█▀▀▌━╾/)
   expect(await hoseText(ui)).toMatch(/^[━╍]{5}┓$/)
   await again()
   await ui.unmount()
 })
 
-test('the vehicle brakes into its stop and pulls away slowly, the wheels stand still while it waits', async ($, on) => {
+test('the rowboat brakes into its stop and pulls away slowly, the oar rests while it waits', async ($, on) => {
   engine(on)
   const clock = mock.clock(on, { now: NOW })
 
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await $.session.measure(measure)
-  await $.command.run({ command: 'clawd', args: 'cooling' })
+  await $.command.run({ command: 'clawd', args: 'see' })
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
-  // Wo die Drehleiter steht, Takt für Takt: die Schritte werden zum Halt hin kürzer.
-  const at = async () => (await rowText(ui, 'clawd')).indexOf('╤╤╤╤╤╕')
+  // Wo der Bootsrand steht, Takt für Takt: die Schritte werden zum Halt hin kürzer.
+  const at = async () => (await rowText(ui, 'clawd')).indexOf('▄▄▄▄▄▄▖')
   const arriving: number[] = []
   for (let i = 1; i <= 10; i += 1) {
     await clock.advance(120)
@@ -998,8 +997,8 @@ test('the vehicle brakes into its stop and pulls away slowly, the wheels stand s
   expect(gaps[gaps.length - 1]).toBeGreaterThan(gaps[0] ?? 0)
   await ui.unmount()
 
-  // In den Apps dieselbe Kurve; im Halt blinkt das Blaulicht weiter, die Räder stehen still.
-  await $.command.run({ command: 'clawd', args: 'cooling' })
+  // In den Apps dieselbe Kurve; im Halt ruht das Ruder, während Clawd aussteigt.
+  await $.command.run({ command: 'clawd', args: 'see' })
   const app = await $.ui.mount({ ...BAND, surface: 'vscode' })
   const svg = async () => String((await svgOf(app))?.props.source)
   const xs: number[] = []
@@ -1009,16 +1008,16 @@ test('the vehicle brakes into its stop and pulls away slowly, the wheels stand s
   }
   expect(xs[1]! - xs[0]!).toBeGreaterThan(xs[8]! - xs[7]!)
   await clock.advance(2 * 120)
-  const wheels = (source: string) => source.match(/stroke-dashoffset="[^"]*"/g)?.join()
+  const oar = (source: string) => source.match(/rotate\(40 [^)]*\)/)?.[0]
   const holding = await svg()
   await clock.advance(120)
   const stillHolding = await svg()
   expect(stillHolding).not.toBe(holding)
-  expect(wheels(stillHolding)).toBe(wheels(holding))
+  expect(oar(stillHolding)).toBe(oar(holding))
   await app.unmount()
 })
 
-test('while Clawd arrives the hidden water does not redraw the bar, and the server writes only when its heat stage changes', async ($, on) => {
+test('while Clawd arrives the hidden water does not redraw the bar', async ($, on) => {
   engine(on)
   const clock = mock.clock(on, { now: NOW })
   const writes: Record<string, number> = {}
@@ -1031,7 +1030,7 @@ test('while Clawd arrives the hidden water does not redraw the bar, and the serv
 
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await $.session.measure(measure)
-  await $.command.run({ command: 'clawd', args: 'server' })
+  await $.command.run({ command: 'clawd', args: 'pool' })
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   usages.push({ model: 'claude-opus-5-5', input_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1_000 })
   const close = await openStream($)
@@ -1039,83 +1038,48 @@ test('while Clawd arrives the hidden water does not redraw the bar, and the serv
   const drips = writes.drip ?? 0
   await clock.advance(2 * 120)
   expect(writes.drip ?? 0).toBe(drips)
-
-  // Angekommen wird der Schrank heiß: die Hitze steigt jeden Takt, geschrieben wird nur bei jeder neuen Stufe.
-  const heats = writes.heat ?? 0
-  await clock.advance(ARRIVAL + 30_000)
+  // Angekommen läuft es.
+  await clock.advance(ARRIVAL)
   expect(await hoseText(ui)).not.toBe('')
-  expect((writes.heat ?? 0) - heats).toBe(4)
+  expect(writes.drip ?? 0).toBeGreaterThan(drips)
   await close()
   await ui.unmount()
 })
 
-test('the cooling water tank empties with the session tokens', async ($, on) => {
+test('the pool fills with the session tokens, a duck swims in it and at the end it overflows', async ($, on) => {
   engine(on)
   const clock = mock.clock(on, { now: NOW })
 
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await $.session.measure(measure)
-  await cast($, clock, 'kuehlturm')
+  await cast($, clock, 'planschbecken')
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   await step($, 300_000, 0, 1_000)
   await clock.advance(5_000)
 
-  // Ab 250k Tokens Stufe 3: oben ist der Tank schon fast leer, unten noch voll.
-  expect(await sprayText(ui)).toBe(`      ${RACK_ROW}  ▕▃▏`)
-  expect(await puddleText(ui)).toBe(`      ${RACK_ROW}  ▕█▏`)
-  // Die Zeile endet trotzdem genau unter dem Zähler.
+  // Ab 250k Tokens Stufe 3: der Pool steht ein Stück voll; rechtsbündig darunter die Liter.
+  expect(await puddleText(ui)).toBe('▂▂▂▂▂▂▂▂▂▂▏')
   const legs = await rowText(ui, 'beine')
   const live = plain(await liveText(ui))
-  expect(legs.startsWith(` ▘▘ ▝▝         ${RACK_ROW}`)).toBe(true)
-  expect(legs.length).toBe(BODY.length + 1 + live.length)
+  expect(legs).toMatch(/^ ▘▘ ▝▝  ▕▂{10}▏ +≈ 113 ml$/)
+  // Die Zeile endet genau unter dem Zähler.
+  expect(legs.length).toBe(SHADES.length + 1 + live.length)
 
-  // Ab 100m ist er leer.
+  // Ab 100m ist er randvoll, die Ente schwimmt, und es läuft über.
   await step($, 100_000_000, 0, 1_000)
   await clock.advance(5_000)
-  expect(await sprayText(ui)).toMatch(/▕ ▏$/)
-  expect(await puddleText(ui)).toMatch(/▕▁▏$/)
+  expect(await puddleText(ui)).toBe('███████◗██▏▁▁')
   await ui.unmount()
 
-  // Ohne Platz für drei Zeilen steht Clawd selbst in der Leiste, ohne Schrank.
+  const app = await $.ui.mount({ ...BAND, surface: 'vscode' })
+  expect((await svgOf(app))?.props.alt).toBe('Clawd in sunglasses next to the overflowing pool')
+  await app.unmount()
+
+  // Ohne Platz für drei Zeilen steht Clawd selbst in der Leiste, ohne Pool.
   const flat = await $.ui.mount({ ...BAND, props: { ...BAND.props, maxRows: 2 }, surface: 'terminal' })
-  expect(await tapText(flat)).toBe(BODY)
+  expect(await tapText(flat)).toBe(SHADES)
   expect(await flat.find({ key: 'pfuetze' })).toBeUndefined()
   await flat.unmount()
-})
-
-test('the server heats up while a reply streams, steams under the hose and cools down in the pause', async ($, on) => {
-  engine(on)
-  const clock = mock.clock(on, { now: NOW })
-
-  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
-  await $.session.measure(measure)
-  await cast($, clock, 'cooling')
-  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
-  const air = async () => (await sprayText(ui)).slice(RACK + 4, RACK + 6).trim()
-
-  // Kalt: kein Dampf, kein Flimmern.
-  expect(await air()).toBe('')
-  usages.push({ model: 'claude-opus-5-5', input_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1_000 })
-  const close = await openStream($)
-  await clock.advance(1_500)
-  // Der starke Strahl trifft heißes Blech: es dampft.
-  expect(await air()).toMatch(/^[˜~]$/)
-  const app = await $.ui.mount({ ...BAND, surface: 'vscode' })
-  expect((await svgOf(app))?.props.alt).toBe('firefighter Clawd cooling the hot server, it steams')
-  await app.unmount()
-  await clock.advance(20_000)
-  await close()
-  // Das Wasser läuft aus, dann flimmert die Hitze über dem Schrank, bis er Sekunde um Sekunde abkühlt.
-  await clock.advance(DRAIN + 1_000)
-  expect(await hoseText(ui)).toBe('')
-  expect(await air()).toMatch(/^[≀~]$/)
-  await clock.advance(60_000)
-  expect(await air()).toBe('')
-  await ui.unmount()
-
-  const cold = await $.ui.mount({ ...BAND, surface: 'vscode' })
-  expect((await svgOf(cold))?.props.alt).toBe('firefighter Clawd next to the server, hose closed')
-  await cold.unmount()
 })
 
 test('at the tap Clawd scrolls the phone while the water runs into the drain, and lounges more with every liter', async ($, on) => {
@@ -1135,12 +1099,12 @@ test('at the tap Clawd scrolls the phone while the water runs into the drain, an
   // 1.000 ausgegebene Tokens sind 112,5 ml; die Eingabe zählt nicht.
   await step($, 300_000, 0, 1_000)
   await clock.advance(5_000)
-  expect(await rowText(ui, 'beine')).toMatch(/^ ▘▘ ▝▝ ╲▁╱ ≈ 113 ml +$/)
+  expect(await rowText(ui, 'beine')).toMatch(/^ ▘▘ ▝▝ ╲▁╱ +≈ 113 ml$/)
 
   // Ab 1 L sitzt er auf dem Hocker.
   await step($, 0, 0, 10_000)
   await clock.advance(5_000)
-  expect(await rowText(ui, 'beine')).toMatch(/^ ╤═══╤ ╲▁╱ ≈ 1,2 L +$/)
+  expect(await rowText(ui, 'beine')).toMatch(/^ ╤═══╤ ╲▁╱ +≈ 1,2 L$/)
 
   // Viel Tempo: der Strahl schießt in den Abfluss, dort strudelt es.
   usages.push({ model: 'claude-opus-5-5', input_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1_000 })
@@ -1158,7 +1122,7 @@ test('at the tap Clawd scrolls the phone while the water runs into the drain, an
   await clock.advance(5_000)
   expect(await tapText(ui)).toBe('▗▄▆█▆▄▖┻┓')
   expect(await rowText(ui, 'clawd')).toMatch(/^▐▛███▜▌▮   ▿/)
-  expect(await rowText(ui, 'beine')).toMatch(/^╲▚▚▚▚▚╱╲▁╱ ≈ 2\d,\d L +$/)
+  expect(await rowText(ui, 'beine')).toMatch(/^╲▚▚▚▚▚╱╲▁╱ +≈ 2\d,\d L$/)
   await ui.unmount()
 
   const app = await $.ui.mount({ ...BAND, surface: 'vscode' })
@@ -1187,81 +1151,82 @@ test('liters follow Mistral: 45 ml per 400 output tokens, all time from /stats p
   expect(allOutput(null, [book], day)).toBe(350)
 })
 
-test('in the cloud it rains with the tokens per second, the servers blink, and the cloud grows with the session', async ($, on) => {
+test('in the endless shower Clawd sings while the water runs, and the steam thickens with the session', async ($, on) => {
   engine(on)
   const clock = mock.clock(on, { now: NOW })
 
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await $.session.measure(measure)
-  await $.command.run({ command: 'clawd', args: 'wolke' })
+  await cast($, clock, 'dusche')
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
-  // Zu Fuß: erst ohne Wolke, die zieht nach.
-  await clock.advance(5 * 120)
-  expect((await tapText(ui))?.trim()).toBe('')
-  expect(await rowText(ui, 'clawd')).toMatch(/▄▆███▆▄/)
-  await clock.advance(ARRIVAL)
 
-  expect(await tapText(ui)).toBe('      ▃▆▃')
-  expect(await rowText(ui, 'clawd')).toMatch(/^▄▆███▆▄ {2}/)
-  expect(await rowText(ui, 'beine')).toMatch(/^▐▛███▜▌/)
+  // Duschhaube, Brause am Rohr; noch kein Dampf, keine Noten.
+  expect(await tapText(ui)).toBe('▗▄▆▆▆▄▖┳┓')
+  expect(await rowText(ui, 'clawd')).toMatch(/^▐▛███▜▌ ┃ +$/)
+  expect(await puddleText(ui)).toBe('')
+
+  // Viel Tempo: der Strahl prasselt neben ihm herab, und er singt.
+  usages.push({ model: 'claude-opus-5-5', input_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1_000 })
+  const close = await openStream($)
+  await clock.advance(10)
+  expect(await rowText(ui, 'clawd')).toMatch(/^▐▛███▜▌[┃╏]┃.?[♪♫]/)
+  const app = await $.ui.mount({ ...BAND, surface: 'vscode' })
+  expect((await svgOf(app))?.props.alt).toBe('Clawd singing in the shower')
+  await app.unmount()
+  await close()
+  await clock.advance(DRAIN)
+  expect(await rowText(ui, 'clawd')).not.toMatch(/[♪♫]/)
+
+  // Ab 10m Stufe 7: dichter Dampf in beiden Zeilen.
   await step($, 10_000_000, 0, 1_000)
   await clock.advance(5_000)
-  expect(await tapText(ui)).toBe('  ▃▆█▅▇▆▃')
-
-  // Starker Regen neben dem Schirm, dazwischen zuckt ein Blitz.
-  usages.push({ model: 'claude-opus-5-5', input_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1_000 })
-  const close = await openStream($)
-  await clock.advance(10)
-  expect(await rowText(ui, 'beine')).toMatch(/^▐▛███▜▌╏[╏╱]/)
-  const tops: string[] = []
-  for (let i = 0; i < 4; i += 1) {
-    tops.push(await rowText(ui, 'clawd'))
-    await clock.advance(150)
-  }
-  expect(tops.some(top => top.includes('╲'))).toBe(true)
-  expect(tops.some(top => !top.includes('╲'))).toBe(true)
-  await close()
-  await clock.advance(DRAIN)
+  expect(await puddleText(ui)).toMatch(/^[░▒]{7}$/)
+  expect(await sprayText(ui)).toMatch(/^[░▒]{4}$/)
   await ui.unmount()
 
-  const app = await $.ui.mount({ ...BAND, surface: 'vscode' })
-  const svg = await svgOf(app)
-  expect(svg?.props.alt).toBe('Clawd under an umbrella, cloudy')
-  // Eine grüne Server-LED leuchtet auch in der Ruhe.
-  expect(String(svg?.props.source)).toContain('#4EBA65')
-  await app.unmount()
+  const steamy = await $.ui.mount({ ...BAND, surface: 'vscode' })
+  expect((await svgOf(steamy))?.props.alt).toBe('Clawd in a shower cap under the shower in thick steam')
+  // Rosa Duschhaube.
+  expect(String((await svgOf(steamy))?.props.source)).toContain('#F2A7C3')
+  await steamy.unmount()
 })
 
-test('thirsty Clawd gulps from the bottle with the tokens per second, the empties pile up with the session', async ($, on) => {
+test('in the bathtub the foam piles up with the session, and at the end it spills over', async ($, on) => {
   engine(on)
   const clock = mock.clock(on, { now: NOW })
 
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await $.session.measure(measure)
-  await cast($, clock, 'durst')
+  await cast($, clock, 'badewanne')
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
 
-  expect(await tapText(ui)).toBe(' '.repeat(9))
-  expect(await rowText(ui, 'clawd')).toMatch(/^▐▛███▜▌╺▆▆▆▌ +$/)
-  // Ab 50m Stufe 9: unten sechs leere Flaschen, darüber drei.
-  await step($, 50_000_000, 0, 1_000)
-  await clock.advance(5_000)
-  expect(await puddleText(ui)).toBe('    ▯▯▯▯▯▯')
-  expect(await sprayText(ui)).toBe('▆▆▌  ▯▯▯')
+  // Hahn über der Wanne, Clawd sitzt drin; noch kein Schaum.
+  expect(await tapText(ui)).toBe('       ┻┓')
+  expect(await rowText(ui, 'beine')).toMatch(/^▙▄▄▄▄▄▄▄▟ *$/)
+  expect(await sprayText(ui)).toBe('')
 
-  // Beim Trinken wandern Luftblasen durch die Flasche, bei viel Tempo kleckert es.
+  // Viel Tempo: der Hahn läuft in die Wanne.
   usages.push({ model: 'claude-opus-5-5', input_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1_000 })
   const close = await openStream($)
   await clock.advance(10)
-  expect(await rowText(ui, 'clawd')).toMatch(/^▐▛███▜▌╺[▆▄]{3}▌/)
-  expect(await rowText(ui, 'clawd')).toMatch(/▄/)
-  expect(await rowText(ui, 'beine')).toMatch(/^ ▘▘ ▝▝ [˙,]/)
+  expect(await rowText(ui, 'clawd')).toMatch(/^▐▛███▜▌[˙ ][┃╏]/)
   await close()
   await clock.advance(DRAIN)
+
+  // Ab 250k Stufe 3: drei Schaumblasen neben ihm.
+  await step($, 300_000, 0, 1_000)
+  await clock.advance(5_000)
+  expect(await sprayText(ui)).toMatch(/^[°o○]{3}$/)
+
+  // Ab 100m türmt sich der Schaum auch über ihm, und es schwappt über.
+  await step($, 100_000_000, 0, 1_000)
+  await clock.advance(5_000)
+  expect(await tapText(ui)).toMatch(/^[°o○ ]{7}┻┓$/)
+  expect(await puddleText(ui)).toMatch(/^▁▂+▁$/)
   await ui.unmount()
 
   const app = await $.ui.mount({ ...BAND, surface: 'vscode' })
-  expect((await svgOf(app))?.props.alt).toBe('Clawd with a water bottle')
+  expect((await svgOf(app))?.props.alt).toBe('Clawd in the overflowing bathtub')
   await app.unmount()
 })
 
@@ -1306,12 +1271,12 @@ test('/clawd switches the job, or names the ones it knows', async ($, on) => {
 
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   expect((await $.command.run({ command: 'clawd', args: 'hahn' })).text).toBe('Clawd: tap.')
-  expect((await $.command.run({ command: 'clawd', args: '' })).text).toBe('Clawd: cloud.')
-  expect((await $.command.run({ command: 'clawd', args: 'Kühlturm' })).text).toBe('Clawd: cooling.')
-  expect((await $.command.run({ command: 'clawd', args: 'flasche' })).text).toBe('Clawd: thirst.')
+  expect((await $.command.run({ command: 'clawd', args: '' })).text).toBe('Clawd: shower.')
+  expect((await $.command.run({ command: 'clawd', args: 'Pool' })).text).toBe('Clawd: pool.')
+  expect((await $.command.run({ command: 'clawd', args: 'badewanne' })).text).toBe('Clawd: bath.')
   expect((await $.command.run({ command: 'clawd', args: 'see' })).text).toBe('Clawd: lake.')
   expect((await $.command.run({ command: 'clawd', args: '' })).text).toBe('Clawd: tap.')
-  expect((await $.command.run({ command: 'clawd', args: 'pirat' })).text).toBe('Clawd knows: tap, cloud, cooling, thirst, lake.')
+  expect((await $.command.run({ command: 'clawd', args: 'pirat' })).text).toBe('Clawd knows: tap, shower, pool, bath, lake.')
 })
 
 test('Clawd keeps his width, so the bar does not wrap or switch details while he sprays', async ($, on) => {
@@ -1320,7 +1285,7 @@ test('Clawd keeps his width, so the bar does not wrap or switch details while he
 
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await $.session.measure(measure)
-  await cast($, clock, 'cooling')
+  await cast($, clock, 'pool')
   const ui = await $.ui.mount({ ...BAND, props: { ...BAND.props, bodyColumns: 113 }, surface: 'terminal' })
   const before = await text(ui)
   expect(before).toBe('✻ Session  ████████ 34% used  ·  Resets 6:40pm   1/3 ›')
@@ -1330,7 +1295,7 @@ test('Clawd keeps his width, so the bar does not wrap or switch details while he
   for (let i = 0; i < 5; i += 1) {
     await clock.advance(300)
     expect(await text(ui)).toBe(before)
-    expect(await tapText(ui)).toBe(HELMET)
+    expect(await tapText(ui)).toBe(HEADLESS)
   }
   await close()
   await clock.advance(5_000)
@@ -1344,7 +1309,7 @@ test('in a very narrow bar Clawd goes before any number does', async ($, on) => 
 
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await $.session.measure(measure)
-  await cast($, clock, 'cooling')
+  await cast($, clock, 'pool')
   const narrow = await $.ui.mount({ ...BAND, props: { ...BAND.props, bodyColumns: 69 }, surface: 'terminal' })
   expect(await tapText(narrow)).toBeUndefined()
   expect(plain(await liveText(narrow))).toBe('$1.23 · 0 tokens · session ›')
@@ -1358,31 +1323,31 @@ test('in a very narrow bar Clawd goes before any number does', async ($, on) => 
   expect(await text(tight)).toBe('✻ Session  ████████ 34% used  ·  Resets 6:40pm   1/3 ›')
   await tight.unmount()
   const roomy = await $.ui.mount({ ...BAND, props: { ...BAND.props, bodyColumns: 113 }, surface: 'terminal' })
-  expect(await tapText(roomy)).toBe(HELMET)
+  expect(await tapText(roomy)).toBe(HEADLESS)
   await roomy.unmount()
 })
 
-test('in the apps Clawd is a pixel Svg: the fire truck drives in, then he stands at the cooling tower', async ($, on) => {
+test('in the apps Clawd is a pixel Svg: he walks in with the hose, then stands at the pool', async ($, on) => {
   engine(on)
   const clock = mock.clock(on, { now: NOW })
 
   await $.session.start({ cwd: '/', surface: 'vscode', isInteractive: true })
   await $.session.measure(measure)
-  await $.command.run({ command: 'clawd', args: 'cooling' })
+  await $.command.run({ command: 'clawd', args: 'pool' })
   const app = await $.ui.mount({ ...BAND, surface: 'vscode' })
-  const truck = await svgOf(app)
-  expect(truck?.props.alt).toBe('fire truck arriving')
-  expect(String(truck?.props.source)).toContain('translate(')
+  const walking = await svgOf(app)
+  expect(walking?.props.alt).toBe('Clawd walking in with a garden hose')
+  expect(String(walking?.props.source)).toContain('translate(')
   await clock.advance(ARRIVAL)
 
   const clawd = await svgOf(app)
-  expect(clawd?.props.alt).toBe('firefighter Clawd next to the server, hose closed')
+  expect(clawd?.props.alt).toBe('Clawd in sunglasses next to the pool')
   expect(clawd?.props).toEqual(expect.objectContaining({ width: 80, height: 36 }))
-  // Roter Helm, Messing-Strahlrohr, grauer Serverschrank mit grünen LEDs, kein Wasser.
-  expect(String(clawd?.props.source)).toContain('#C8372D')
+  // Sonnenbrille, Messingdüse, grüner Schlauch, blauer Pool, kein Wasser im Bogen.
+  expect(String(clawd?.props.source)).toContain('#1F1E1D')
   expect(String(clawd?.props.source)).toContain('#D4A93F')
-  expect(String(clawd?.props.source)).toContain('#8D8B85')
-  expect(String(clawd?.props.source)).toContain('#4EBA65')
+  expect(String(clawd?.props.source)).toContain('#4E8A3E')
+  expect(String(clawd?.props.source)).toContain('#4A6FA5')
   expect(String(clawd?.props.source)).not.toContain('stroke-dasharray')
   expect(await tapText(app)).toBeUndefined()
   await app.unmount()

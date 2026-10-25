@@ -60,8 +60,6 @@ declare module 'claude-code' {
       flow: number
       role: number
       arrival: number
-      heat: number
-      flicker: number
       isLight: boolean
       context: Shaped<ContextInfo | null>
     }

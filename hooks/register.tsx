@@ -14,7 +14,6 @@ import type { Ledger } from './ledger'
 import type { Series } from './chart'
 import {
   FLOWS,
-  HEAT_FULL,
   RESTING,
   ROLES,
   ROLE_WORDS,
@@ -28,9 +27,7 @@ import {
   sceneSvg,
   tapLevel,
   sizeLevel,
-  stageOf,
   terminalScene,
-  WARM,
 } from './clawd'
 import type { Piece } from './clawd'
 import { MONTHS, RANGES, dateOf, dayNumber, heatmap, modelName, summarize } from './stats'
@@ -126,14 +123,6 @@ const PAUSE = 30 * 60_000
 let arrivalNow = -1
 let arriver: { cancel: () => void } | undefined
 let lastActive = 0
-// Der Serverschrank im Kühlturm: beim Streamen wird er heiß, in der Pause kühlt er langsam ab;
-// `flicker` lässt dabei die Hitze über ihm flimmern.
-const heat = atom({ plugin: 'burn', key: 'heat' } as const, 0)
-const flicker = atom({ plugin: 'burn', key: 'flicker' } as const, 0)
-const COOL = 1_000
-const COOL_STEP = 3
-let heatNow = 0
-let cooler: { cancel: () => void } | undefined
 // Ab wann das Kassenbuch zählt; aus dem Store gelesen, nicht bei jedem Bild.
 let trackedSince: number | undefined
 // stats-cache.json, eine Minute lang gehalten statt bei jedem Neuzeichnen gelesen.
@@ -304,7 +293,6 @@ async function tap($: EngineInterface) {
   if (inFlight > 0) {
     if (dripper === undefined && at - lastActive >= PAUSE) await arrive($)
     lastActive = at
-    stopCooling()
     // Kommt gleich der nächste Strom, läuft das Wasser einfach weiter, ohne neu anzusetzen.
     isDraining = false
     if (dripper !== undefined) return
@@ -318,7 +306,7 @@ async function tap($: EngineInterface) {
   isDraining = true
 }
 
-// Dreht den Hahn ganz zu; in der Pause kühlt dann der Serverschrank ab.
+// Dreht den Hahn ganz zu.
 async function closeTap($: EngineInterface) {
   dripper?.cancel()
   dripper = undefined
@@ -326,7 +314,6 @@ async function closeTap($: EngineInterface) {
   flowNow = -1
   await update($, flow, () => -1)
   await update($, drip, () => 0)
-  cool($)
 }
 
 // Startet die Anfahrt von vorn; der Takt zählt hoch und hört am Ende von selbst auf.
@@ -345,36 +332,10 @@ async function arrive($: EngineInterface) {
   })
 }
 
-// Die Leiste zeigt von der Hitze nur die Stufe: geschrieben wird erst, wenn sie wechselt,
-// nicht bei jedem Takt, in dem sie ein Stück sinkt oder steigt.
-async function setHeat($: EngineInterface, value: number, force = false) {
-  const before = stageOf(heatNow)
-  heatNow = Math.max(0, Math.min(HEAT_FULL, value))
-  if (force || stageOf(heatNow) !== before) await update($, heat, () => heatNow)
-}
-
-// In der Pause kühlt der Schrank jede Sekunde ein Stück ab, bis er wieder kalt ist.
-function cool($: EngineInterface) {
-  if (ROLES[roleNow] !== 'cooling' || cooler !== undefined || heatNow <= 0) return
-  cooler = $.clock.every(COOL, () => {
-    void (async () => {
-      await setHeat($, heatNow - COOL_STEP)
-      await update($, flicker, i => i + 1)
-      if (heatNow <= 0) stopCooling()
-    })().catch(() => undefined)
-  })
-}
-function stopCooling() {
-  cooler?.cancel()
-  cooler = undefined
-}
-
-// Neue Rolle: der Schrank ist wieder kalt, und Clawd kommt neu an.
+// Neue Rolle: Clawd kommt neu an.
 async function cast($: EngineInterface, index: number) {
   roleNow = index
   await update($, role, () => index)
-  stopCooling()
-  await setHeat($, 0, true)
   await arrive($)
 }
 
@@ -425,10 +386,6 @@ async function flowTick($: EngineInterface) {
   if (arrivalNow >= 0) {
     if (isDraining) await closeTap($)
     return
-  }
-  // Heiß wird der Schrank erst, wenn Clawd angekommen ist, und je mehr Tokens pro Sekunde, desto schneller.
-  if (ROLES[roleNow] === 'cooling' && heatNow < HEAT_FULL) {
-    await setHeat($, heatNow + (WARM[flowNow] ?? 0))
   }
   if (flowNow !== before) return
   // Ausgelaufen: der letzte Tropfen ist aufgeschlagen.
@@ -723,7 +680,7 @@ export const register: Register = on => {
     })
     await $.command.register({
       name: 'clawd',
-      description: "Change Clawd's job in the usage bar; /clawd <job> picks one, e.g. tap or lake",
+      description: "Change Clawd's job in the usage bar; /clawd <job> picks one: tap, shower, pool, bath or lake",
     })
 
     const usage = await $.session.usage()
@@ -1621,11 +1578,11 @@ export const register: Register = on => {
     const frames = FLOWS[strength] ?? FLOWS[0] ?? [RESTING]
     const water = isDripping ? (frames[(await read($, drip)) % frames.length] ?? RESTING) : null
     const roleAt = ROLES[(await read($, role)) % ROLES.length] ?? 'tap'
-    // Am Hahn: die Liter wie der Zähler (Session, 24h, ...), die Bequemlichkeit nach der Sitzung.
+    // Die Liter wie der Zähler (Session, 24h, ...); am Hahn die Bequemlichkeit nach der Sitzung.
     const isTap = roleAt === 'tap'
     const outs = await read($, liveOut)
     const sessionOut = (await read($, tokens)).output + inFlight
-    const liters = isTap ? literText((outs[span.key] + inFlight) * ML_PER_TOKEN) : ''
+    const liters = literText((outs[span.key] + inFlight) * ML_PER_TOKEN)
     const scene = {
       role: roleAt,
       water,
@@ -1633,8 +1590,6 @@ export const register: Register = on => {
       tick: await read($, drip),
       level: isTap ? tapLevel(sessionOut * ML_PER_TOKEN) : sizeLevel(Math.max(0, totals.session + inFlight - behindBy)),
       liters,
-      stage: stageOf(await read($, heat)),
-      flicker: (await read($, flicker)) + (isDripping ? await read($, drip) : 0),
       arrival: arrivalAt,
     }
     const tapColors = !isTerminal && (await read($, isLight)) ? PALETTE.light : PALETTE.dark
@@ -1698,7 +1653,7 @@ export const register: Register = on => {
     }
     // In den Apps stehen die Liter neben dem Becken, im Terminal zeichnet sie die Szene.
     const literPart =
-      !isTerminal && isTap ? (
+      !isTerminal ? (
         <Text key="liter" size="footnote" color="suggestion" dimColor tabular>
           {nb(liters === '' ? '' : ` ${liters}`)}
         </Text>
@@ -1734,7 +1689,7 @@ export const register: Register = on => {
     // Die Apps, desktop und vscode gleich und nur nach der Breite: erst fallen die Details weg,
     // dann rückt der Zähler mit Clawd unter die Limits, dann geht dort der Preis. Clawd tritt
     // erst beiseite, wenn auch das nicht passt. Das Terminal rechnet weiter wie unten.
-    // Die Liter am Hahn kommen nur dazu, wo sie noch Platz haben; für sie tritt Clawd nicht beiseite.
+    // Die Liter kommen nur dazu, wo sie noch Platz haben; für sie tritt Clawd nicht beiseite.
     type AppPlan = { detail: string | undefined; hasTap: boolean; isStacked: boolean; withMoney: boolean; withLiters: boolean }
     const appRoom = e.props.bodyColumns - 1
     const appLive = (hasTap: boolean, withMoney: boolean, withLiters = false) =>
@@ -1749,7 +1704,7 @@ export const register: Register = on => {
       for (const [isStacked, withMoney] of [[false, true], [true, true], [true, false]] as const) {
         const detail = options.find(d => fits(d, withMoney, isStacked))
         if (detail !== undefined || fits(undefined, withMoney, isStacked)) {
-          return { detail, hasTap: true, isStacked, withMoney, withLiters: isTap && fits(detail, withMoney, isStacked, true) }
+          return { detail, hasTap: true, isStacked, withMoney, withLiters: fits(detail, withMoney, isStacked, true) }
         }
       }
 

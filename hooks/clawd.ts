@@ -441,9 +441,16 @@ export function terminalScene(scene: Scene, room: number, reach: number): Termin
 // Pixel wie die Krabben der Clawd-Crew, gezeichnet in 60 × 27, angezeigt gut 1,3-fach.
 export const SCENE_VIEW = { x: 0, y: 3, width: 60, height: 27 }
 export const SCENE_SVG = { width: 80, height: 36 }
-// In der Leiste der Apps steht die Szene in Texthöhe, ein Drittel kleiner als ihr viewBox.
-export const APP_SCENE = { width: 40, height: 18 }
-export type SceneColors = { suggestion: string; gray: string }
+// In der Leiste der Apps steht die Szene 1,5-fach (90 × 41): auf Retina drei Gerätepixel je
+// Szenenpixel, also scharf, und groß genug, dass man Clawd erkennt. Die halbe Zeile, die 40,5 px
+// zu 41 fehlt, bleibt unten frei (preserveAspectRatio oben bündig), damit nichts verschwimmt.
+// Wird es eng, steht er 1-fach (60 × 27), gestapelt immer 1-fach, damit die Leiste flach bleibt.
+// Ein engerer Ausschnitt ginge nicht: Sonnenschirm, Dampf, Noten und Pool reichen bis an den Rand.
+export const appScene = (scale: number) => ({ width: SCENE_VIEW.width * scale, height: Math.ceil(SCENE_VIEW.height * scale) })
+export const APP_SCENE = appScene(1.5)
+export const APP_SCENE_FLAT = appScene(1)
+// `isLight`: auf hellem Grund bekommen Weißes (Schaum, Dampf, Becken, Wanne) Kontur und Ton.
+export type SceneColors = { suggestion: string; gray: string; isLight?: boolean }
 const INK = {
   clay: '#D97757',
   ink: '#1F1E1D',
@@ -545,6 +552,8 @@ const splashSvg = (x: number, y: number, colors: SceneColors) =>
 // über dem Abfluss. Aufgefangen wird nichts: das Wasser gurgelt weg, beim Strahl strudelt es.
 const SPOUT = { x: 47.2, y: 13.6 }
 const DRAIN = { x: 47, y: 20.4 }
+// Auf hellem Grund eine graue Kontur um Weißes, sonst ginge es unter.
+const edgeOf = (colors: SceneColors, width = 0.45) => (colors.isLight === true ? ` stroke="${INK.concrete}" stroke-width="${width}"` : '')
 function sinkSvg(scene: Scene, colors: SceneColors, isOpen: boolean): string {
   const { water, strength, tick, level } = scene
   const wet = `fill="${colors.suggestion}"`
@@ -562,9 +571,9 @@ function sinkSvg(scene: Scene, colors: SceneColors, isOpen: boolean): string {
       ].join(''),
     ) +
     lever +
-    `<path d="M37 18.6 L57 18.6 Q 56 23 47 23 Q 38 23 37 18.6 Z" fill="${INK.silver}"/>` +
+    `<path d="M37 18.6 L57 18.6 Q 56 23 47 23 Q 38 23 37 18.6 Z" fill="${INK.silver}"${edgeOf(colors)}/>` +
     `<path d="M38.6 19.6 L55.4 19.6 Q 54.4 21.8 47 21.8 Q 39.6 21.8 38.6 19.6 Z" fill="${INK.concreteTop}"${level > 0 ? '' : ' fill-opacity="0.6"'}/>` +
-    crisp(px(36.6, 17.8, 20.8, 1, INK.flourDark)) +
+    crisp(px(36.6, 17.8, 20.8, 1, colors.isLight === true ? INK.concrete : INK.flourDark)) +
     `<ellipse cx="${DRAIN.x}" cy="${DRAIN.y}" rx="1.5" ry="0.45" fill="${INK.boot}"/>`
   let stream = ''
   if (water !== null) {
@@ -609,20 +618,19 @@ function idlerPx(comfort: number, step: number, tick: number): string {
       : comfort === 1
         ? [px(10, 22, 2, 2.5, INK.clay), px(20, 22, 2, 2.5, INK.clay)]
         : []
-  const body = crisp(
-    [
-      px(4, 15, 4, 4, INK.clay),
-      px(8, 12, 16, 10, INK.clay),
-      px(24, 15, 2, 3, INK.clay),
-      px(11, 15, 2, 1.2, INK.ink),
-      px(19, 15, 2, 1.2, INK.ink),
-      ...legs,
-      // Das Handy: dunkle Hülle, das Display leuchtet, eine Zeile scrollt durch.
-      px(25.6, 12, 2.8, 4.6, INK.boot),
-      px(26, 12.5, 2, 3.6, SCREEN),
-      px(26, 12.6 + (tick % 4) * 0.8, 2, 0.4, '#FFFFFF', ' fill-opacity="0.8"'),
-    ].join(''),
-  )
+  const shape = [
+    px(4, 15, 4, 4, INK.clay),
+    px(8, 12, 16, 10, INK.clay),
+    px(24, 15, 2, 3, INK.clay),
+    px(11, 15, 2, 1.2, INK.ink),
+    px(19, 15, 2, 1.2, INK.ink),
+    ...legs,
+    // Das Handy: dunkle Hülle, das Display leuchtet, eine Zeile scrollt durch.
+    px(25.6, 12, 2.8, 4.6, INK.boot),
+    px(26, 12.5, 2, 3.6, SCREEN),
+    px(26, 12.6 + (tick % 4) * 0.8, 2, 0.4, '#FFFFFF', ' fill-opacity="0.8"'),
+  ].join('')
+  const body = crisp(shape)
   if (comfort === 0) return body
   if (comfort === 1) {
     // Holzhocker, Clawd sitzt eine Spur tiefer darauf.
@@ -636,7 +644,8 @@ function idlerPx(comfort: number, step: number, tick: number): string {
     `<path d="M4 13 L11 24.5 L28 24.5" fill="none" stroke="${INK.wood}" stroke-width="3.2" stroke-linejoin="round"/>` +
     `<path d="M4 13 L11 24.5 L28 24.5" fill="none" stroke="${INK.red}" stroke-width="3.2" stroke-dasharray="1.6 1.6" stroke-linejoin="round"/>` +
     `<path d="M11 24.5 L8 ${GROUND} M28 24.5 L28 ${GROUND} M6 16 L3 ${GROUND}" stroke="${INK.crust}" stroke-width="1"/>`
-  const lying = `<g transform="translate(3 3) rotate(-24 16 22)">${body}</g>`
+  // Gedreht ohne crispEdges, sonst werden die schrägen Kanten treppig.
+  const lying = `<g transform="translate(3 3) rotate(-24 16 22)">${shape}</g>`
   if (comfort === 2) return chair + lying
   // Sonnenschirm und ein Drink auf dem Beistelltisch.
   const parasol =
@@ -658,14 +667,14 @@ function idlerPx(comfort: number, step: number, tick: number): string {
 // Duschwanne. Das Wasser prasselt auf die Haube und rinnt an ihm herab; solange es läuft, singt er.
 // Der Dampf wird mit der Sitzung dichter, bis Clawd fast verschwindet.
 const BRAUSE = { left: 11, right: 21, y: 5 }
-function showerBackSvg(): string {
+function showerBackSvg(colors: SceneColors): string {
   return (
     crisp(
       [
         px(32.5, 3.6, 1.6, GROUND - 3.6, INK.concrete),
         px(16, 3.6, 18, 1.2, INK.concreteTop),
         px(15.4, 3.6, 1.2, 1.4, INK.concreteTop),
-        px(0.5, GROUND - 1, 35, 1, TOWEL),
+        px(0.5, GROUND - 1, 35, 1, colors.isLight === true ? INK.concrete : TOWEL),
       ].join(''),
     ) +
     `<path d="M${BRAUSE.left} ${BRAUSE.y} L${BRAUSE.right} ${BRAUSE.y} L${BRAUSE.right - 1.5} ${BRAUSE.y - 1.2} L${BRAUSE.left + 1.5} ${BRAUSE.y - 1.2} Z" fill="${INK.concreteTop}"/>` +
@@ -711,11 +720,14 @@ function showerSvg(scene: Scene, colors: SceneColors, isHere: boolean): string {
           })
           .join('')
       : ''
-  // Dampfschwaden: mit jeder Stufe einer mehr und alle dichter.
-  const puffs: [number, number, number][] = [[4, 22, 3], [30, 20, 3.5], [8, 9, 3], [26, 7, 3.5], [16, 14, 4], [2, 15, 3], [36, 12, 4], [20, 22, 4], [12, 4, 3.5], [40, 5, 4]]
+  // Dampfschwaden: mit jeder Stufe einer mehr und alle dichter. Sie ziehen um Clawd herum,
+  // über der Haube und unten um die Beine, sein Gesicht (x 8 bis 24, y 12 bis 19) bleibt frei.
+  // Auf hellem Grund ist der Dampf grau statt weiß.
+  const puffs: [number, number, number][] = [[4, 23, 3], [30, 20, 3.5], [6, 8, 3], [27, 8, 3.5], [16, 25, 3.5], [1.5, 15, 2.6], [36, 12, 4], [24, 25, 3.2], [13, 4, 3.5], [40, 5, 4]]
+  const puff = colors.isLight === true ? INK.concrete : '#FFFFFF'
   const steam = puffs
     .slice(0, Math.min(10, level))
-    .map(([x, y, r], i) => `<circle cx="${x + ((tick + i) % 2) * 0.4}" cy="${y}" r="${r}" fill="#FFFFFF" fill-opacity="${(0.08 + Math.min(10, level) * 0.025).toFixed(2)}"/>`)
+    .map(([x, y, r], i) => `<circle cx="${x + ((tick + i) % 2) * 0.4}" cy="${y}" r="${r}" fill="${puff}" fill-opacity="${(0.08 + Math.min(10, level) * 0.025).toFixed(2)}"/>`)
     .join('')
 
   return rain + notes + steam
@@ -794,10 +806,10 @@ function bathSvg(scene: Scene, colors: SceneColors, isHere: boolean): string {
   const { water, strength, tick, level } = scene
   const wet = `fill="${colors.suggestion}"`
   const tub =
-    `<path d="M${TUB.left} ${TUB.rim} L${TUB.right} ${TUB.rim} L${TUB.right - 1.5} 25 Q ${TUB.right - 2} 26.4 ${TUB.right - 3.5} 26.4 L${TUB.left + 3.5} 26.4 Q ${TUB.left + 2} 26.4 ${TUB.left + 1.5} 25 Z" fill="${INK.silver}"/>` +
-    crisp(px(TUB.left - 0.5, TUB.rim - 0.6, TUB.right - TUB.left + 1, 1, TOWEL) + px(4, 26.4, 2, 1.1, INK.gold) + px(TUB.right - 6, 26.4, 2, 1.1, INK.gold))
+    `<path d="M${TUB.left} ${TUB.rim} L${TUB.right} ${TUB.rim} L${TUB.right - 1.5} 25 Q ${TUB.right - 2} 26.4 ${TUB.right - 3.5} 26.4 L${TUB.left + 3.5} 26.4 Q ${TUB.left + 2} 26.4 ${TUB.left + 1.5} 25 Z" fill="${INK.silver}"${edgeOf(colors)}/>` +
+    crisp(px(TUB.left - 0.5, TUB.rim - 0.6, TUB.right - TUB.left + 1, 1, colors.isLight === true ? INK.concrete : TOWEL) + px(4, 26.4, 2, 1.1, INK.gold) + px(TUB.right - 6, 26.4, 2, 1.1, INK.gold))
   const foam = FOAM_AT.slice(0, Math.min(10, level))
-    .map(([x, dy, r], i) => `<circle cx="${(x + ((tick + i) % 3 === 0 ? 0.2 : 0)).toFixed(1)}" cy="${(TUB.rim - 0.4 + dy).toFixed(1)}" r="${r}" fill="#FFFFFF" fill-opacity="0.92"/>`)
+    .map(([x, dy, r], i) => `<circle cx="${(x + ((tick + i) % 3 === 0 ? 0.2 : 0)).toFixed(1)}" cy="${(TUB.rim - 0.4 + dy).toFixed(1)}" r="${r}" fill="#FFFFFF" fill-opacity="0.92"${edgeOf(colors, 0.3)}/>`)
     .join('')
   const over =
     level >= 8
@@ -908,7 +920,7 @@ export function sceneSvg(scene: Scene, colors: SceneColors): string {
   if (role === 'tap') {
     back.push(sinkSvg({ ...scene, water: isHere ? water : null }, colors, isTapOpen(arrival)))
   } else if (role === 'shower') {
-    back.push(showerBackSvg())
+    back.push(showerBackSvg(colors))
     front.push(showerSvg(scene, colors, isHere))
   } else if (role === 'pool') {
     const drawn = poolSvg(scene, colors, isHere)
@@ -932,7 +944,7 @@ export function sceneSvg(scene: Scene, colors: SceneColors): string {
     const shift = arrivalShift(arrival)
     const roll = rollOf(arrival)
     const turn = shift > 0 ? `translate(${(VEHICLE_WIDTH - shift * 44).toFixed(1)} 0) scale(-1 1)` : `translate(${(shift * 40).toFixed(1)} 0)`
-    back.push(`<g transform="${turn}">${rowboatPx(roll, colors)}</g>`)
+    back.push(`<g mask="url(#burn-einfahrt)"><g transform="${turn}">${rowboatPx(roll, colors)}</g></g>`)
     if (arrival > ARRIVE.in) {
       const hop = arrival === ARRIVE.in + 1 ? -3 : arrival === ARRIVE.in + 2 ? -1 : 0
       clawd = `<g transform="translate(0 ${hop})">${clawdPx(role, 0)}</g>`
@@ -952,8 +964,15 @@ export function sceneSvg(scene: Scene, colors: SceneColors): string {
     clawd = clawdPx(role, 0, role === 'shower' && isOn)
   }
   const { x, y, width, height } = SCENE_VIEW
+  // Was hereinkommt, blendet am linken Rand weich ein, statt dort hart abgeschnitten zu sein; bis
+  // x 4, wo Clawds Schere beginnt, damit er angekommen nicht verblasst.
+  const fade =
+    arrival >= 0
+      ? `<defs><linearGradient id="burn-rand" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="4" y2="0"><stop offset="0" stop-color="#000"/><stop offset="1" stop-color="#FFF"/></linearGradient><mask id="burn-einfahrt" maskUnits="userSpaceOnUse" x="-60" y="0" width="180" height="40"><rect x="-60" y="0" width="180" height="40" fill="url(#burn-rand)"/></mask></defs>`
+      : ''
+  const soft = (inner: string) => (arrival >= 0 && inner !== '' ? `<g mask="url(#burn-einfahrt)">${inner}</g>` : inner)
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${x} ${y} ${width} ${height}">${back.join('')}${clawd}${front.join('')}</svg>`
+  return `<svg xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMin meet" viewBox="${x} ${y} ${width} ${height}">${fade}${back.join('')}${soft(clawd)}${front.join('')}</svg>`
 }
 
 export function sceneAlt(scene: Scene): string {

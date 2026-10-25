@@ -14,6 +14,7 @@ import type { Ledger } from './ledger'
 import type { Series } from './chart'
 import {
   APP_SCENE,
+  appScene,
   FLOWS,
   RESTING,
   ROLES,
@@ -177,6 +178,7 @@ const PALETTE = {
     success: '#4EBA65',
     warning: '#FFC107',
     error: '#FF6B80',
+    isLight: false,
   },
   light: {
     orange: '#D97757',
@@ -188,6 +190,7 @@ const PALETTE = {
     success: '#2C7A39',
     warning: '#966C1E',
     error: '#AB2B3F',
+    isLight: true,
   },
 } as const
 type Palette = (typeof PALETTE)['dark' | 'light']
@@ -1632,12 +1635,13 @@ export const register: Register = on => {
     const reach = 1 + liveWidth
     const lane = arrivalAt < 0 ? 0 : Math.max(0, Math.min(24, e.props.bodyColumns - 6 - TAP_WIDTH - reach))
     const drawn = isTerminal ? terminalScene(scene, lane, reach) : null
-    const tapPart = !isTerminal && Svg !== undefined ? (
+    // In den Apps 1,5-fach oder, wenn es eng wird, 1-fach (siehe appPlan).
+    const tapPart = (size: { width: number; height: number } = APP_SCENE) => !isTerminal && Svg !== undefined ? (
       <Svg
         key="hahn"
         alt={sceneAlt(scene)}
-        width={APP_SCENE.width}
-        height={APP_SCENE.height}
+        width={size.width}
+        height={size.height}
         source={sceneSvg(scene, tapColors)}
       />
     ) : (
@@ -1687,7 +1691,7 @@ export const register: Register = on => {
     const livePart = (hasTap: boolean) => [
       <Box flexGrow={1} />,
       <Text>{nb(hasTap ? ' ' : '   ')}</Text>,
-      hasTap ? tapPart : null,
+      hasTap ? tapPart() : null,
       hasTap ? literPart : null,
       hasTap ? <Text>{nb(' ')}</Text> : null,
       <Button
@@ -1713,43 +1717,65 @@ export const register: Register = on => {
     ]
 
     // Die Apps, desktop und vscode gleich und nur nach der Breite, in einer Zeile:
-    // erst kürzen sich die Details, dann gehen die Liter, dann der Preis, zuletzt Clawd
-    // (ohne ihn kommt der Preis wieder, wenn er passt). Erst wenn auch die nackte Zeile
-    // nicht passt (unter rund 70 Spalten), rückt der Zähler unter die Limits.
+    // erst kürzen sich die Details, dann gehen die Liter, dann wird Clawd kleiner (1,5-fach
+    // 13 Zellen, 1-fach 9), dann geht der Preis. Passt er auch 1-fach nicht in die Zeile,
+    // rückt der Zähler mit ihm unter die Limits; erst wenn selbst das nicht passt, tritt er
+    // beiseite. Jede Stufe passt auch bei jeder größeren Breite, und es gilt die erste, die
+    // passt: so zeigt ein breiteres Fenster Clawd nie kleiner als ein schmaleres.
     // Das Terminal rechnet weiter wie unten.
     type AppPlan = {
       detail: string | undefined
       hasTap: boolean
+      // 0 ohne Clawd, sonst seine Größe zum viewBox
+      scale: number
       withMoney: boolean
       withLiters: boolean
       isStacked: boolean
     }
     const APP_STEPS = [
-      { hasTap: true, withMoney: true, withLiters: true },
-      { hasTap: true, withMoney: true, withLiters: false },
-      { hasTap: true, withMoney: false, withLiters: false },
-      { hasTap: false, withMoney: true, withLiters: false },
-      { hasTap: false, withMoney: false, withLiters: false },
+      { scale: 1.5, withMoney: true, withLiters: true },
+      { scale: 1.5, withMoney: true, withLiters: false },
+      { scale: 1, withMoney: true, withLiters: false },
+      { scale: 1, withMoney: false, withLiters: false },
+      { scale: 0, withMoney: true, withLiters: false },
+      { scale: 0, withMoney: false, withLiters: false },
     ] as const
+    type AppStep = (typeof APP_STEPS)[number]
     const appRoom = e.props.bodyColumns - 1
-    const appLive = (step: (typeof APP_STEPS)[number]) =>
-      appText((step.hasTap ? 3 : 2) + liveRoomOf(step.withMoney) + (step.withLiters ? LITER_WIDTH : 0)) +
-      (step.hasTap ? appCells(APP_SCENE.width) : 0)
+    const appLive = (step: AppStep) =>
+      appText((step.scale > 0 ? 3 : 2) + liveRoomOf(step.withMoney) + (step.withLiters ? LITER_WIDTH : 0)) +
+      (step.scale > 0 ? appCells(appScene(step.scale).width) : 0)
     const appPlan = (left: (detail: string | undefined) => number, details: string[]): AppPlan => {
       const options = [...details, undefined]
-      for (const step of APP_STEPS) {
-        const fits = (d: string | undefined) => left(d) + appLive(step) <= appRoom
-        if (options.some(fits)) return { detail: options.find(fits), ...step, isStacked: false }
-      }
-      const below = APP_STEPS.find(step => appLive(step) <= appRoom)
+      const inRow = (step: AppStep): AppPlan | null => {
+        const at = options.findIndex(d => left(d) + appLive(step) <= appRoom)
 
-      return {
-        detail: options.find(d => left(d) <= appRoom),
-        hasTap: below?.hasTap ?? false,
-        withMoney: below?.withMoney ?? false,
-        withLiters: below?.withLiters ?? false,
-        isStacked: true,
+        return at < 0 ? null : { detail: options[at], ...step, hasTap: step.scale > 0, isStacked: false }
       }
+      // Gestapelt steht Clawd 1-fach, damit die Leiste flach bleibt.
+      const stacked = (step: AppStep): AppPlan | null =>
+        appLive(step) <= appRoom
+          ? { detail: options.find(d => left(d) <= appRoom), ...step, hasTap: step.scale > 0, isStacked: true }
+          : null
+      const withTap = APP_STEPS.filter(step => step.scale > 0)
+      const without = APP_STEPS.filter(step => step.scale === 0)
+      const plans = [
+        ...withTap.map(inRow),
+        ...withTap.filter(step => step.scale === 1).map(stacked),
+        ...without.map(inRow),
+        ...without.map(stacked),
+      ]
+
+      return (
+        plans.find(plan => plan !== null) ?? {
+          detail: options.find(d => left(d) <= appRoom),
+          hasTap: false,
+          scale: 0,
+          withMoney: false,
+          withLiters: false,
+          isStacked: true,
+        }
+      )
     }
     // Rechts der Zähler als Text; nur der Zeitraum ist der Knopf, denn die Apps zeichnen
     // jeden Button als ihren eigenen Knopf. Farben stehen außerhalb davon (siehe unten).
@@ -1774,12 +1800,13 @@ export const register: Register = on => {
         <Text size="footnote">{nb(`${span.label} ›`)}</Text>
       </Button>,
     ]
-    // Eine ruhige Zeile: links die Limits, rechts Clawd in Texthöhe, Liter, Zähler; alles mittig.
+    // Eine ruhige Zeile: links die Limits, rechts Clawd (höher als der Text), Liter, Zähler;
+    // alles mittig, so steht der Text auf halber Höhe neben ihm.
     const appRight = (plan: AppPlan) => [
       <Box flexGrow={1} />,
       plan.hasTap && (
         <Box flexDirection="row" alignItems="center">
-          {tapPart}
+          {tapPart(appScene(plan.scale))}
           {plan.withLiters && literPart}
         </Box>
       ),

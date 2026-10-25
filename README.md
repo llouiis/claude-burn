@@ -48,7 +48,7 @@ Danach Claude Code neu starten.
 
 Unter 80 Spalten Terminalbreite tritt Clawd beiseite, damit die Zahlen Platz haben.
 
-In der Desktop-App und in VS Code steht alles in einer ruhigen Zeile, Clawd in Texthöhe. Klickbar ist dort nur der Zeitraum (`session ›`), damit die Apps keinen großen Knopf zeichnen. Wird das Fenster sehr schmal (unter rund 70 Zeichen), rückt der Zähler unter die Limits.
+In der Desktop-App und in VS Code steht alles in einer ruhigen Zeile, Clawd anderthalbmal so groß wie seine Pixelvorlage (90 × 41 px, auf Retina gestochen scharf), der Text mittig daneben. Klickbar ist dort nur der Zeitraum (`session ›`), damit die Apps keinen großen Knopf zeichnen. Wird das Fenster schmaler (unter rund 90 Zeichen), steht Clawd in Originalgröße (60 × 27 px); unter rund 78 Zeichen rückt der Zähler mit ihm unter die Limits. Ein breiteres Fenster zeigt ihn nie kleiner als ein schmaleres.
 
 Seit 0.16.0 merkt sich der Mod die Tokens jeder Unterhaltung: Setzt du eine Sitzung fort, passen Preis und Tokens zusammen.
 

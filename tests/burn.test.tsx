@@ -762,6 +762,45 @@ test('every job draws in the terminal and in the apps, and tempo and size change
   }
 })
 
+test('in the light theme the white things get a contour; the dark theme stays as it was', () => {
+  const dark = { suggestion: '#B1B9F9', gray: '#B0AEA5' }
+  const light = { suggestion: '#5769F7', gray: '#6B6A65', isLight: true }
+  for (const role of ROLES) {
+    const scene: Scene = { role, water: null, strength: 0, tick: 0, level: 10, arrival: -1 }
+    // Dunkel mit und ohne Schalter gleich.
+    expect(sceneSvg(scene, { ...dark, isLight: false })).toBe(sceneSvg(scene, dark))
+  }
+  const bath = sceneSvg({ role: 'bath', water: null, strength: 0, tick: 0, level: 10, arrival: -1 }, light)
+  expect(bath).toMatch(/fill="#FFFFFF" fill-opacity="0.92" stroke="#8D8B85"/)
+  const shower = sceneSvg({ role: 'shower', water: null, strength: 0, tick: 0, level: 10, arrival: -1 }, light)
+  expect(shower).not.toContain('fill="#FFFFFF" fill-opacity')
+  const sink = sceneSvg({ role: 'tap', water: null, strength: 0, tick: 0, level: 1, arrival: -1 }, light)
+  expect(sink).toMatch(/fill="#E6E4DD" stroke="#8D8B85"/)
+})
+
+test('the steam leaves Clawds face free, the deck chair is smooth, arrivals fade in at the edge', () => {
+  const colors = { suggestion: '#B1B9F9', gray: '#B0AEA5' }
+  // Gesicht unter der Haube: x 8 bis 24, y 12 bis 19; kein Dampfkreis reicht hinein.
+  for (const tick of [0, 1]) {
+    const shower = sceneSvg({ role: 'shower', water: FLOWS[3]?.[0] ?? null, strength: 3, tick, level: 10, arrival: -1 }, colors)
+    const puffs = [...shower.matchAll(/<circle cx="([\d.]+)" cy="([\d.]+)" r="([\d.]+)" fill="#FFFFFF"/g)].map(m => m.slice(1).map(Number))
+    expect(puffs.length).toBe(10)
+    for (const [x = 0, y = 0, r = 0] of puffs) {
+      const dx = Math.max(8 - x, 0, x - 24)
+      const dy = Math.max(12 - y, 0, y - 19)
+      expect({ x, y, free: dx * dx + dy * dy >= r * r }).toEqual({ x, y, free: true })
+    }
+  }
+  // Im Liegestuhl liegt er gedreht ohne crispEdges, sonst würden die Kanten treppig.
+  const chair = sceneSvg({ role: 'tap', water: null, strength: 0, tick: 0, level: 4, arrival: -1 }, colors)
+  expect(chair).toMatch(/rotate\(-24 16 22\)"><rect/)
+  // Wer hereinkommt, blendet am linken Rand ein; angekommen gibt es keine Maske mehr.
+  for (const role of ROLES) {
+    expect(sceneSvg({ role, water: null, strength: 0, tick: 0, level: 0, arrival: 3 }, colors)).toContain('mask="url(#burn-einfahrt)"')
+    expect(sceneSvg({ role, water: null, strength: 0, tick: 0, level: 0, arrival: -1 }, colors)).not.toContain('mask=')
+  }
+})
+
 test('Clawd at the pool stands next to the price and sprays only while a reply streams', async ($, on) => {
   engine(on)
   const clock = mock.clock(on, { now: NOW })
@@ -1343,7 +1382,7 @@ test('in the apps Clawd is a pixel Svg: he walks in with the hose, then stands a
 
   const clawd = await svgOf(app)
   expect(clawd?.props.alt).toBe('Clawd in sunglasses next to the pool')
-  expect(clawd?.props).toEqual(expect.objectContaining({ width: 40, height: 18 }))
+  expect(clawd?.props).toEqual(expect.objectContaining({ width: 90, height: 41 }))
   // Sonnenbrille, Messingdüse, grüner Schlauch, blauer Pool, kein Wasser im Bogen.
   expect(String(clawd?.props.source)).toContain('#1F1E1D')
   expect(String(clawd?.props.source)).toContain('#D4A93F')

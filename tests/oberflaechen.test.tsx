@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On, SessionMeasureInput } from 'claude-code'
 
-import { APP_SCENE } from '../hooks/clawd'
+import { APP_SCENE, APP_SCENE_FLAT } from '../hooks/clawd'
 
 // Die Apps (desktop, vscode, mobile) zählen bodyColumns in Zeichen ihrer Code-Schrift.
 // Hier geht es um die Leiste und das Fenster dort: Clawd bleibt, nichts bricht um,
@@ -113,38 +113,42 @@ function cells(node: Node): number {
 
   return kids.reduce((sum: number, one) => sum + cells(one), 0)
 }
-// Clawd ist das Svg in der Größe der Szene, gleich in welcher Rolle (ein Svg trägt keinen key).
+// Clawd ist das Svg in der Größe der Szene, 1,5- oder 1-fach, gleich in welcher Rolle (ein Svg
+// trägt keinen key).
 const clawd = async (ui: Drawn) =>
-  ((await ui.findAll({ type: 'Svg' })) as { props: Record<string, unknown> }[]).find(
-    svg => svg.props.width === APP_SCENE.width && svg.props.height === APP_SCENE.height,
+  ((await ui.findAll({ type: 'Svg' })) as { props: Record<string, unknown> }[]).find(svg =>
+    [APP_SCENE, APP_SCENE_FLAT].some(size => svg.props.width === size.width && svg.props.height === size.height),
   )
 
 const WIDTHS = [45, 55, 70, 100]
 
-test('in the apps the bar is one row from 70 columns and fits; Clawd misses only from 70 to 74', async ($, on) => {
+test('in the apps the bar fits every width, one row from 78 columns; wider never shows Clawd smaller', async ($, on) => {
   engine(on)
   await $.session.start({ cwd: '/', surface: 'vscode', isInteractive: true })
   await $.session.measure(measure)
 
   for (const surface of ['vscode', 'desktop'] as const) {
-    for (const bodyColumns of [...WIDTHS, 75]) {
+    let last = { scale: 0, isRow: false }
+    for (let bodyColumns = 40; bodyColumns <= 140; bodyColumns += 1) {
       const ui = await $.ui.mount({ ...BAND, props: { ...BAND.props, bodyColumns }, surface })
-      expect({ surface, bodyColumns, clawd: (await clawd(ui)) !== undefined }).toEqual({
+      const svg = (await clawd(ui)) as { props: Record<string, unknown> } | undefined
+      const scale = svg === undefined ? 0 : Number(svg.props.width) / 60
+      const isRow = !JSON.stringify(await ui.drawn()).includes('"flexDirection":"column"')
+      // Gestapelt 1-fach, in einer Zeile 1-fach, ab 90 Spalten 1,5-fach.
+      expect({ surface, bodyColumns, scale, isRow }).toEqual({
         surface,
         bodyColumns,
-        // Darunter steht er mit dem Zähler in der zweiten Zeile.
-        clawd: bodyColumns < 70 || bodyColumns >= 75,
+        scale: bodyColumns >= 90 ? 1.5 : 1,
+        isRow: bodyColumns >= 78,
       })
-      // Eine Zeile; nur wo selbst die nackte Zeile nicht passt, rückt der Zähler darunter.
-      expect({ bodyColumns, isRow: !JSON.stringify(await ui.drawn()).includes('"flexDirection":"column"') }).toEqual({
-        bodyColumns,
-        isRow: bodyColumns >= 70,
-      })
+      // Monoton: eine Spalte mehr zeigt Clawd nie kleiner und stapelt nie wieder.
+      expect({ bodyColumns, grows: scale >= last.scale && (isRow || !last.isRow) }).toEqual({ bodyColumns, grows: true })
       expect({ surface, bodyColumns, cells: cells((await ui.drawn()) as Node) <= bodyColumns }).toEqual({
         surface,
         bodyColumns,
         cells: true,
       })
+      last = { scale, isRow }
       await ui.unmount()
     }
   }
@@ -159,6 +163,36 @@ test('before the first reply Clawd stands in the apps too', async ($, on) => {
     expect({ bodyColumns, clawd: (await clawd(ui)) !== undefined }).toEqual({ bodyColumns, clawd: true })
     await ui.unmount()
   }
+})
+
+test('in the apps Clawd stands at one and a half times his viewBox, crisp and centred beside the text', async ($, on) => {
+  engine(on)
+  await $.session.start({ cwd: '/', surface: 'vscode', isInteractive: true })
+  await $.session.measure(measure)
+
+  for (const surface of ['vscode', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...BAND, props: { ...BAND.props, bodyColumns: 130 }, surface })
+    const svg = (await clawd(ui)) as { props: Record<string, unknown> } | undefined
+    expect(svg?.props).toEqual(expect.objectContaining({ width: 90, height: 41 }))
+    // 1,5-fach: auf Retina drei Gerätepixel je Szenenpixel. Die halbe Zeile zu 41 bleibt unten
+    // frei, statt die Szene um einen Viertelpixel zu verschieben.
+    const source = String(svg?.props.source)
+    const [, , width, height] = (/viewBox="([^"]+)"/.exec(source)?.[1] ?? '').split(' ').map(Number)
+    expect(APP_SCENE.width / (width ?? 1)).toBe(1.5)
+    expect(APP_SCENE.height - 1.5 * (height ?? 0)).toBe(0.5)
+    expect(source).toContain('preserveAspectRatio="xMidYMin meet"')
+    expect(source).toContain('shape-rendering="crispEdges"')
+    // Die Zeile richtet alles mittig aus, so steht der Text auf halber Höhe neben ihm.
+    const tree = JSON.stringify(await ui.drawn())
+    expect(tree.startsWith('{"type":"Box","props":{"flexDirection":"row","alignItems":"center"')).toBe(true)
+    await ui.unmount()
+  }
+  // Wird es eng, steht er 1-fach in der Zeile.
+  const narrow = await $.ui.mount({ ...BAND, props: { ...BAND.props, bodyColumns: 80 }, surface: 'vscode' })
+  expect(((await clawd(narrow)) as { props: Record<string, unknown> } | undefined)?.props).toEqual(
+    expect.objectContaining({ width: 60, height: 27 }),
+  )
+  await narrow.unmount()
 })
 
 test('details go before Clawd; only a tiny panel sends him aside', async ($, on) => {

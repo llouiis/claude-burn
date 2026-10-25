@@ -13,11 +13,11 @@ import { PREFIX, SPANS, START_KEY, addTo, allOutput, costFrom, liveTotals } from
 import type { Ledger } from './ledger'
 import type { Series } from './chart'
 import {
+  APP_SCENE,
   FLOWS,
   RESTING,
   ROLES,
   ROLE_WORDS,
-  SCENE_SVG,
   SLOT,
   arrivalLength,
   isRestingAt,
@@ -137,6 +137,12 @@ const COST_PREFIX = 'cost:'
 const COST_KEY = `${COST_PREFIX}${SESSION_ID}`
 let ownCost: Ledger = { buckets: {}, archived: 0 }
 let lastCostUsd = 0
+// Die Tokens dieser Unterhaltung, unter ihrer Id gespeichert, damit ein Fortsetzen sie
+// wiederfindet. Dazu der Preis beim ersten Zählen: Fehlen die Tokens von früher (eine
+// Sitzung von vor 0.16.0), zählen Preis und Tokens beide erst ab da, statt sich zu widersprechen.
+const TALLY_PREFIX = 'tally:'
+let tallyKey: string | undefined
+let costBase = 0
 const liveCost = atom(
   { plugin: 'burn', key: 'liveCost' } as const,
   { session: 0, day: 0, week: 0, month: 0, all: 0 },
@@ -647,6 +653,23 @@ async function refreshContext($: EngineInterface, force = false) {
   await update($, context, () => info)
 }
 
+const sumOf = (t: TokenTotals) => t.input + t.output + t.cacheRead + t.cacheWrite
+
+// Beim Start: die gespeicherten Tokens zurück, sonst den Preis als Nullpunkt, wenn er schon läuft.
+async function restoreTally($: EngineInterface) {
+  tallyKey = `${TALLY_PREFIX}${await $.session.id()}`
+  const kept = (await $.store.get(tallyKey)) as { tokens: TokenTotals; costBase: number } | undefined
+  const held = await read($, tokens)
+  if (kept !== undefined && sumOf(kept.tokens) > sumOf(held)) await update($, tokens, () => kept.tokens)
+  costBase = kept?.costBase ?? (sumOf(held) > 0 ? 0 : lastCostUsd)
+  await saveTally($)
+}
+
+async function saveTally($: EngineInterface) {
+  if (tallyKey === undefined) return
+  await $.store.set(tallyKey, { tokens: await read($, tokens), costBase })
+}
+
 async function refreshLive($: EngineInterface) {
   const ledgers = await ledgersOf($, PREFIX, LEDGER_KEY, ownLedger)
   const costs = await ledgersOf($, COST_PREFIX, COST_KEY, ownCost)
@@ -660,7 +683,7 @@ async function refreshLive($: EngineInterface) {
   await update($, live, () => result)
   await publish($, true)
   // Kosten kennt /stats nicht: sie zählen ab dem ersten Eintrag des Mods.
-  const cost = liveTotals(costs, start, null, lastCostUsd, nowMs, berlinDay)
+  const cost = liveTotals(costs, start, null, Math.max(0, lastCostUsd - costBase), nowMs, berlinDay)
   await update($, liveCost, () => cost)
   const outs = await ledgersOf($, OUT_PREFIX, OUT_KEY, ownOut)
   const out = liveTotals(outs, start, null, totals.output, nowMs, berlinDay)
@@ -688,6 +711,7 @@ export const register: Register = on => {
     await update($, now, () => at)
     await update($, startedAt, () => usage.startedAt)
     lastCostUsd = usage.cost?.usd ?? 0
+    await restoreTally($)
     // Ein Neuladen verliert Takt und laufende Ströme: nicht mit altem Rückstand weiterzeichnen.
     streaming.clear()
     inFlight = 0
@@ -813,6 +837,7 @@ export const register: Register = on => {
         cacheRead: totals.cacheRead + used.cache_read_input_tokens,
         cacheWrite: totals.cacheWrite + used.cache_creation_input_tokens,
       }))
+      await saveTally($)
       const amount =
         used.input_tokens +
         used.output_tokens +
@@ -1611,8 +1636,8 @@ export const register: Register = on => {
       <Svg
         key="hahn"
         alt={sceneAlt(scene)}
-        width={SCENE_SVG.width}
-        height={SCENE_SVG.height}
+        width={APP_SCENE.width}
+        height={APP_SCENE.height}
         source={sceneSvg(scene, tapColors)}
       />
     ) : (
@@ -1658,11 +1683,12 @@ export const register: Register = on => {
           {nb(liters === '' ? '' : ` ${liters}`)}
         </Text>
       ) : null
-    const livePart = (hasTap: boolean, withMoney = true, withLiters = true) => [
+    // Im Terminal ist der ganze Zähler der Knopf.
+    const livePart = (hasTap: boolean) => [
       <Box flexGrow={1} />,
       <Text>{nb(hasTap ? ' ' : '   ')}</Text>,
       hasTap ? tapPart : null,
-      hasTap && withLiters ? literPart : null,
+      hasTap ? literPart : null,
       hasTap ? <Text>{nb(' ')}</Text> : null,
       <Button
         key="live"
@@ -1672,12 +1698,12 @@ export const register: Register = on => {
           await publish($, true)
         }}
       >
-        {liveMoney !== '' && withMoney && (
+        {liveMoney !== '' && (
           <Text size="footnote" color="claude" tabular>
             {liveMoney}
           </Text>
         )}
-        {liveMoney !== '' && withMoney && <Text size="footnote" dimColor>{nb(' · ')}</Text>}
+        {liveMoney !== '' && <Text size="footnote" dimColor>{nb(' · ')}</Text>}
         {liveArrow !== '' && <Text size="footnote" dimColor>{nb(liveArrow)}</Text>}
         <Text size="footnote" color="claude" tabular>
           {liveValue}
@@ -1686,63 +1712,107 @@ export const register: Register = on => {
       </Button>,
     ]
 
-    // Die Apps, desktop und vscode gleich und nur nach der Breite: erst fallen die Details weg,
-    // dann rückt der Zähler mit Clawd unter die Limits, dann geht dort der Preis. Clawd tritt
-    // erst beiseite, wenn auch das nicht passt. Das Terminal rechnet weiter wie unten.
-    // Die Liter kommen nur dazu, wo sie noch Platz haben; für sie tritt Clawd nicht beiseite.
-    type AppPlan = { detail: string | undefined; hasTap: boolean; isStacked: boolean; withMoney: boolean; withLiters: boolean }
+    // Die Apps, desktop und vscode gleich und nur nach der Breite, in einer Zeile:
+    // erst kürzen sich die Details, dann gehen die Liter, dann der Preis, zuletzt Clawd
+    // (ohne ihn kommt der Preis wieder, wenn er passt). Erst wenn auch die nackte Zeile
+    // nicht passt (unter rund 70 Spalten), rückt der Zähler unter die Limits.
+    // Das Terminal rechnet weiter wie unten.
+    type AppPlan = {
+      detail: string | undefined
+      hasTap: boolean
+      withMoney: boolean
+      withLiters: boolean
+      isStacked: boolean
+    }
+    const APP_STEPS = [
+      { hasTap: true, withMoney: true, withLiters: true },
+      { hasTap: true, withMoney: true, withLiters: false },
+      { hasTap: true, withMoney: false, withLiters: false },
+      { hasTap: false, withMoney: true, withLiters: false },
+      { hasTap: false, withMoney: false, withLiters: false },
+    ] as const
     const appRoom = e.props.bodyColumns - 1
-    const appLive = (hasTap: boolean, withMoney: boolean, withLiters = false) =>
-      appText((hasTap ? 2 : 3) + liveRoomOf(withMoney) + (withLiters ? LITER_WIDTH : 0)) +
-      (hasTap ? appCells(SCENE_SVG.width) : 0)
+    const appLive = (step: (typeof APP_STEPS)[number]) =>
+      appText((step.hasTap ? 3 : 2) + liveRoomOf(step.withMoney) + (step.withLiters ? LITER_WIDTH : 0)) +
+      (step.hasTap ? appCells(APP_SCENE.width) : 0)
     const appPlan = (left: (detail: string | undefined) => number, details: string[]): AppPlan => {
       const options = [...details, undefined]
-      const fits = (detail: string | undefined, withMoney: boolean, isStacked: boolean, withLiters = false) =>
-        isStacked
-          ? left(detail) <= appRoom && appLive(true, withMoney, withLiters) <= appRoom
-          : left(detail) + appLive(true, withMoney, withLiters) <= appRoom
-      for (const [isStacked, withMoney] of [[false, true], [true, true], [true, false]] as const) {
-        const detail = options.find(d => fits(d, withMoney, isStacked))
-        if (detail !== undefined || fits(undefined, withMoney, isStacked)) {
-          return { detail, hasTap: true, isStacked, withMoney, withLiters: fits(detail, withMoney, isStacked, true) }
-        }
+      for (const step of APP_STEPS) {
+        const fits = (d: string | undefined) => left(d) + appLive(step) <= appRoom
+        if (options.some(fits)) return { detail: options.find(fits), ...step, isStacked: false }
       }
+      const below = APP_STEPS.find(step => appLive(step) <= appRoom)
 
       return {
         detail: options.find(d => left(d) <= appRoom),
-        hasTap: false,
+        hasTap: below?.hasTap ?? false,
+        withMoney: below?.withMoney ?? false,
+        withLiters: below?.withLiters ?? false,
         isStacked: true,
-        withMoney: appLive(false, true) <= appRoom,
-        withLiters: false,
       }
     }
-    // Eine Zeile, oder die Limits oben und darunter rechtsbündig Clawd mit dem Zähler.
-    const appBand = (plan: AppPlan, limits: ReturnType<typeof h>) =>
+    // Rechts der Zähler als Text; nur der Zeitraum ist der Knopf, denn die Apps zeichnen
+    // jeden Button als ihren eigenen Knopf. Farben stehen außerhalb davon (siehe unten).
+    const appCounter = (withMoney: boolean) => [
+      <Text size="footnote" tabular>
+        {liveMoney !== '' && withMoney && <Text color="claude">{liveMoney}</Text>}
+        {liveMoney !== '' && withMoney && <Text dimColor>{nb(' · ')}</Text>}
+        {liveArrow !== '' && <Text dimColor>{nb(liveArrow)}</Text>}
+        <Text color="claude">{liveValue}</Text>
+        <Text dimColor>{nb(' tokens · ')}</Text>
+      </Text>,
+      <Button
+        key="live"
+        plain
+        dimColor
+        label={nb(`${span.label} ›`)}
+        onPress={async () => {
+          await update($, liveSpan, i => (i + 1) % SPANS.length)
+          await publish($, true)
+        }}
+      >
+        <Text size="footnote">{nb(`${span.label} ›`)}</Text>
+      </Button>,
+    ]
+    // Eine ruhige Zeile: links die Limits, rechts Clawd in Texthöhe, Liter, Zähler; alles mittig.
+    const appRight = (plan: AppPlan) => [
+      <Box flexGrow={1} />,
+      plan.hasTap && (
+        <Box flexDirection="row" alignItems="center">
+          {tapPart}
+          {plan.withLiters && literPart}
+        </Box>
+      ),
+      <Text>{nb(plan.hasTap ? '  ' : '   ')}</Text>,
+      ...appCounter(plan.withMoney),
+    ]
+    const appBand = (plan: AppPlan, left: ReturnType<typeof h>) =>
       plan.isStacked ? (
         <Box flexDirection="column">
-          {limits}
+          {left}
           <Box flexDirection="row" alignItems="center">
-            {livePart(plan.hasTap, plan.withMoney, plan.withLiters)}
+            {appRight(plan)}
           </Box>
         </Box>
       ) : (
         <Box flexDirection="row" alignItems="center">
-          {limits}
-          {livePart(plan.hasTap, plan.withMoney, plan.withLiters)}
+          {left}
+          {appRight(plan)}
         </Box>
       )
 
     const current = await read($, reading)
     if (current === null && !isTerminal) {
-      const waiting = "Usage limits appear after Claude's next reply"
+      // Kürzer, ehe Clawd oder eine Zahl gehen muss.
+      const waiting = ["Usage limits appear after Claude's next reply", 'Limits after the next reply']
+      const plan = appPlan(text => appText(MARK.length + (text?.length ?? 0)), waiting)
 
       return appBand(
-        // In mono eine Zelle je Zeichen; wird es eng, kürzt der Text sein Ende.
-        appPlan(() => Math.min(MARK.length + waiting.length, appRoom), []),
+        plan,
         <Box flexDirection="row" alignItems="center" flexShrink={1}>
-          <Text mono size="footnote" wrap="truncate-end">
+          <Text size="footnote" wrap="truncate-end">
             <Text color="claude">{nb(MARK)}</Text>
-            <Text dimColor>{nb(waiting)}</Text>
+            <Text dimColor>{nb(plan.detail ?? '')}</Text>
           </Text>
         </Box>,
       )
@@ -1868,7 +1938,7 @@ export const register: Register = on => {
     if (plan !== null) {
       return appBand(
         plan,
-        <Box flexDirection="row" alignItems="center">
+        <Box flexDirection="row" alignItems="center" flexShrink={1}>
           {limits}
           {controls}
         </Box>,

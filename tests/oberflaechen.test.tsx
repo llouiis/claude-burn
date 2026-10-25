@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On, SessionMeasureInput } from 'claude-code'
 
-import { SCENE_SVG } from '../hooks/clawd'
+import { APP_SCENE } from '../hooks/clawd'
 
 // Die Apps (desktop, vscode, mobile) zählen bodyColumns in Zeichen ihrer Code-Schrift.
 // Hier geht es um die Leiste und das Fenster dort: Clawd bleibt, nichts bricht um,
@@ -71,14 +71,20 @@ const CACHE = {
 }
 
 // Nichts liegt unter dem Plugin: diese Hooks stehen für Claude Code selbst.
-function engine(on: On) {
+function engine(on: On, resumed?: { usd: number; stored?: Record<string, unknown> }) {
   on('command.register', () => ({ value: { command: 'tokens' } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('session.id', () => ({ value: 'sitzung-1' }))
   on('session.usage', () => ({
-    value: { startedAt: NOW - 183_000, context: { window: 200_000 }, rateLimits: [] },
+    value: {
+      startedAt: NOW - 183_000,
+      context: { window: 200_000 },
+      rateLimits: [],
+      ...(resumed === undefined ? {} : { cost: { usd: resumed.usd } }),
+    },
   }))
   on('session.measure', (_, e) => ({ changed: e.changed }))
-  mock.store(on)
+  mock.store(on, resumed?.stored)
   mock.clock(on, { now: NOW })
   mock.env(on, { HOME: '/home/louis' })
   on('fs.read', (_, e) => {
@@ -110,23 +116,29 @@ function cells(node: Node): number {
 // Clawd ist das Svg in der Größe der Szene, gleich in welcher Rolle (ein Svg trägt keinen key).
 const clawd = async (ui: Drawn) =>
   ((await ui.findAll({ type: 'Svg' })) as { props: Record<string, unknown> }[]).find(
-    svg => svg.props.width === SCENE_SVG.width && svg.props.height === SCENE_SVG.height,
+    svg => svg.props.width === APP_SCENE.width && svg.props.height === APP_SCENE.height,
   )
 
 const WIDTHS = [45, 55, 70, 100]
 
-test('in the apps Clawd stays in the bar at usual panel widths, and the bar fits', async ($, on) => {
+test('in the apps the bar is one row from 70 columns and fits; Clawd misses only from 70 to 74', async ($, on) => {
   engine(on)
   await $.session.start({ cwd: '/', surface: 'vscode', isInteractive: true })
   await $.session.measure(measure)
 
   for (const surface of ['vscode', 'desktop'] as const) {
-    for (const bodyColumns of WIDTHS) {
+    for (const bodyColumns of [...WIDTHS, 75]) {
       const ui = await $.ui.mount({ ...BAND, props: { ...BAND.props, bodyColumns }, surface })
       expect({ surface, bodyColumns, clawd: (await clawd(ui)) !== undefined }).toEqual({
         surface,
         bodyColumns,
-        clawd: true,
+        // Darunter steht er mit dem Zähler in der zweiten Zeile.
+        clawd: bodyColumns < 70 || bodyColumns >= 75,
+      })
+      // Eine Zeile; nur wo selbst die nackte Zeile nicht passt, rückt der Zähler darunter.
+      expect({ bodyColumns, isRow: !JSON.stringify(await ui.drawn()).includes('"flexDirection":"column"') }).toEqual({
+        bodyColumns,
+        isRow: bodyColumns >= 70,
       })
       expect({ surface, bodyColumns, cells: cells((await ui.drawn()) as Node) <= bodyColumns }).toEqual({
         surface,
@@ -212,4 +224,56 @@ test('the stats charts in the apps stay inside a narrow pane', async ($, on) => 
       await ui.unmount()
     }
   }
+})
+
+// Alle Texte der Zeichnung hintereinander, ohne die festen Leerzeichen.
+function textOf(node: Node): string {
+  if (node === null || node === undefined || typeof node === 'boolean') return ''
+  if (typeof node === 'string' || typeof node === 'number') return String(node).replace(/ /g, ' ')
+  if (Array.isArray(node)) return node.map(one => textOf(one as Node)).join('')
+  if (node.type === 'Button') return `[${String(node.props?.label ?? '').replace(/ /g, ' ')}]`
+
+  return ((node.children ?? []) as Node[]).map(textOf).join('')
+}
+
+test('in the apps only the span is a button; the numbers are plain text beside it', async ($, on) => {
+  engine(on)
+  await $.session.start({ cwd: '/', surface: 'vscode', isInteractive: true })
+  await $.session.measure(measure)
+
+  for (const surface of ['vscode', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...BAND, surface })
+    const live = (await ui.find({ key: 'live' })) as { props: { label: string } } | undefined
+    expect(live?.props.label.replace(/\u00a0/g, ' ')).toBe('session ›')
+    expect(textOf((await ui.drawn()) as Node)).toContain('$1.23 · 0 tokens · [session ›]')
+    await ui.unmount()
+  }
+  const ui = await $.ui.mount({ ...BAND, surface: 'vscode' })
+  await ui.press({ key: 'live' })
+  expect(textOf((await ui.drawn()) as Node)).toContain('tokens · [24h ›]')
+  await ui.unmount()
+})
+
+test('a resumed session without its tokens counts cost and tokens from now, not $32.79 against 0', async ($, on) => {
+  engine(on, { usd: 32.79 })
+  await $.session.start({ cwd: '/', surface: 'vscode', isInteractive: true })
+  const ui = await $.ui.mount({ ...BAND, surface: 'vscode' })
+  expect(textOf((await ui.drawn()) as Node)).toContain('$0.00 · 0 tokens · [session ›]')
+
+  // Was danach dazukommt, zählt: 0,50 $ mehr.
+  await $.session.measure({ ...measure, cost: { usd: 33.29 } })
+  expect(textOf((await ui.drawn()) as Node)).toContain('$0.50 · ')
+  await ui.unmount()
+})
+
+test('a resumed session finds its tokens again and keeps its full cost', async ($, on) => {
+  const tally = {
+    tokens: { input: 1_000, output: 30_000, cacheRead: 1_100_000, cacheWrite: 0 },
+    costBase: 0,
+  }
+  engine(on, { usd: 32.79, stored: { 'tally:sitzung-1': tally } })
+  await $.session.start({ cwd: '/', surface: 'vscode', isInteractive: true })
+  const ui = await $.ui.mount({ ...BAND, surface: 'vscode' })
+  expect(textOf((await ui.drawn()) as Node)).toContain('$32.79 · 1.131m tokens · [session ›]')
+  await ui.unmount()
 })

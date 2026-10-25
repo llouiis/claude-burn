@@ -35,6 +35,7 @@ const LIMITS = [
 function engine(on: On, stored?: Record<string, unknown>) {
   on('command.register', () => ({ value: { command: 'tokens' } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('session.id', () => ({ value: 'sitzung-1' }))
   on('session.usage', (_, e) => {
     if ((e as { breakdown?: string }).breakdown) breakdowns += 1
 
@@ -1342,7 +1343,7 @@ test('in the apps Clawd is a pixel Svg: he walks in with the hose, then stands a
 
   const clawd = await svgOf(app)
   expect(clawd?.props.alt).toBe('Clawd in sunglasses next to the pool')
-  expect(clawd?.props).toEqual(expect.objectContaining({ width: 80, height: 36 }))
+  expect(clawd?.props).toEqual(expect.objectContaining({ width: 40, height: 18 }))
   // Sonnenbrille, Messingdüse, grüner Schlauch, blauer Pool, kein Wasser im Bogen.
   expect(String(clawd?.props.source)).toContain('#1F1E1D')
   expect(String(clawd?.props.source)).toContain('#D4A93F')

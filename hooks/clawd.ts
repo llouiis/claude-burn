@@ -441,6 +441,8 @@ export function terminalScene(scene: Scene, room: number, reach: number): Termin
 // Pixel wie die Krabben der Clawd-Crew, gezeichnet in 60 × 27, angezeigt gut 1,3-fach.
 export const SCENE_VIEW = { x: 0, y: 3, width: 60, height: 27 }
 export const SCENE_SVG = { width: 80, height: 36 }
+// In der Leiste der Apps steht die Szene in Texthöhe, ein Drittel kleiner als ihr viewBox.
+export const APP_SCENE = { width: 40, height: 18 }
 export type SceneColors = { suggestion: string; gray: string }
 const INK = {
   clay: '#D97757',

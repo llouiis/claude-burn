@@ -1235,6 +1235,25 @@ test('at the tap Clawd scrolls the phone while the water runs into the drain, an
   await app.unmount()
 })
 
+// Das Seitenpanel von VS Code ist selten breiter als 100 Zeichen: dort fielen die Liter früher
+// als Erstes weg und standen erst ab 106 Zeichen da (bis 0.17.2).
+test('in the apps the liters stay as long as Clawd has room, from 59 columns on', async ($, on) => {
+  engine(on)
+  mock.clock(on, { now: NOW })
+  await $.session.start({ cwd: '/', surface: 'vscode', isInteractive: true })
+  await $.session.measure(measure)
+  await step($, 0, 0, 10_000)
+
+  for (const surface of ['vscode', 'desktop'] as const) {
+    for (let bodyColumns = 59; bodyColumns <= 140; bodyColumns += 1) {
+      const ui = await $.ui.mount({ ...BAND, props: { ...BAND.props, bodyColumns }, surface })
+      const liters = plain((await (ui as unknown as Drawing).find({ type: 'Text', text: /≈/ }))?.text)
+      expect({ surface, bodyColumns, liters }).toEqual({ surface, bodyColumns, liters: ' ≈ 1,1 L' })
+      await ui.unmount()
+    }
+  }
+})
+
 test('liters follow Mistral: 45 ml per 400 output tokens, all time from /stats plus the own book after it', () => {
   expect(literText(0)).toBe('')
   expect(literText(340 * 1)).toBe('≈ 340 ml')

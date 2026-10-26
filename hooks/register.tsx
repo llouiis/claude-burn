@@ -1912,8 +1912,9 @@ export const register: Register = on => {
     ]
 
     // Die Apps, desktop und vscode gleich und nur nach der Breite, in einer Zeile:
-    // erst kürzen sich die Details, dann gehen die Liter, dann wird Clawd kleiner (1,5-fach
-    // 13 Zellen, 1-fach 9; als Text in VS Code der Block 23, die eine Zeile 9), dann geht der Preis. Passt er auch 1-fach nicht in die Zeile,
+    // erst kürzen sich die Details, dann wird Clawd kleiner (1,5-fach 13 Zellen, 1-fach 9),
+    // dann geht der Preis, erst dann die Liter. Die Liter bleiben also, solange es geht: das
+    // Seitenpanel von VS Code ist selten breiter als 100 Zeichen. Passt nicht alles in die Zeile,
     // rückt der Zähler mit ihm unter die Limits; erst wenn selbst das nicht passt, tritt er
     // beiseite. Jede Stufe passt auch bei jeder größeren Breite, und es gilt die erste, die
     // passt: so zeigt ein breiteres Fenster Clawd nie kleiner als ein schmaleres.
@@ -1929,7 +1930,8 @@ export const register: Register = on => {
     }
     const APP_STEPS = [
       { scale: 1.5, withMoney: true, withLiters: true },
-      { scale: 1.5, withMoney: true, withLiters: false },
+      { scale: 1, withMoney: true, withLiters: true },
+      { scale: 1, withMoney: false, withLiters: true },
       { scale: 1, withMoney: true, withLiters: false },
       { scale: 1, withMoney: false, withLiters: false },
       { scale: 0, withMoney: true, withLiters: false },
@@ -1956,11 +1958,14 @@ export const register: Register = on => {
         appLive(step) <= appRoom
           ? { detail: options.find(d => left(d) <= appRoom), ...step, hasTap: step.scale > 0, isStacked: true }
           : null
+      // Eine Zeile nur mit Litern und Preis: lieber gestapelt mit allem als einzeilig mit Lücke.
       const withTap = APP_STEPS.filter(step => step.scale > 0)
       const without = APP_STEPS.filter(step => step.scale === 0)
+      const isWhole = (step: AppStep) => step.withLiters && step.withMoney
       const plans = [
-        ...withTap.map(inRow),
+        ...withTap.filter(isWhole).map(inRow),
         ...withTap.filter(step => step.scale === 1).map(stacked),
+        ...withTap.filter(step => !isWhole(step)).map(inRow),
         ...without.map(inRow),
         ...without.map(stacked),
       ]

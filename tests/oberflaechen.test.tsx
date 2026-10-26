@@ -145,10 +145,10 @@ const nodesOf = (tree: Tree): Tree[] => [tree, ...(tree.children ?? []).filter(k
 
 const WIDTHS = [45, 55, 70, 100]
 // In VS Code: ab hier eine Zeile, ab hier die großen Box-Pixel.
-const ROW_FROM = 84
-const LARGE_FROM = 98
+const ROW_FROM = 101
+const LARGE_FROM = 106
 
-test('in the desktop app the bar fits every width, one row from 84 columns; wider never shows Clawd smaller', async ($, on) => {
+test('in the desktop app the bar fits every width, one row from 101 columns; wider never shows Clawd smaller', async ($, on) => {
   engine(on)
   await $.session.start({ cwd: '/', surface: 'vscode', isInteractive: true })
   await $.session.measure(measure)
@@ -160,12 +160,12 @@ test('in the desktop app the bar fits every width, one row from 84 columns; wide
       const svg = (await clawd(ui)) as { props: Record<string, unknown> } | undefined
       const scale = svg === undefined ? 0 : Number(svg.props.width) / 60
       const isRow = !JSON.stringify(await ui.drawn()).includes('"flexDirection":"column"')
-      // Unter 42 Spalten ohne Clawd, dann gestapelt 1-fach, in einer Zeile 1-fach, ab 97 Spalten 1,5-fach.
+      // Unter 42 Spalten ohne Clawd, dann gestapelt 1-fach, ab 101 in einer Zeile 1-fach, ab 105 Spalten 1,5-fach.
       expect({ surface, bodyColumns, scale, isRow }).toEqual({
         surface,
         bodyColumns,
-        scale: bodyColumns >= 97 ? 1.5 : bodyColumns >= 42 ? 1 : 0,
-        isRow: bodyColumns >= 84,
+        scale: bodyColumns >= 105 ? 1.5 : bodyColumns >= 42 ? 1 : 0,
+        isRow: bodyColumns >= 101,
       })
       // Monoton: eine Spalte mehr zeigt Clawd nie kleiner und stapelt nie wieder.
       expect({ bodyColumns, grows: scale >= last.scale && (isRow || !last.isRow) }).toEqual({ bodyColumns, grows: true })
@@ -355,7 +355,7 @@ test('details go before Clawd; only a tiny panel sends him aside', async ($, on)
   await wide.unmount()
 
   // Etwas schmaler: der Reset fehlt, Clawd steht noch da.
-  const less = await $.ui.mount({ ...BAND, props: { ...BAND.props, bodyColumns: 100 }, surface: 'vscode' })
+  const less = await $.ui.mount({ ...BAND, props: { ...BAND.props, bodyColumns: 104 }, surface: 'vscode' })
   expect(await resets(less)).toBe(false)
   expect(await clawd(less)).toBeDefined()
   await less.unmount()

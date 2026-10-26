@@ -9,12 +9,14 @@ import type {
 } from 'claude-code'
 
 import type { ContextInfo, Reading, TokenTotals } from '../types'
-import { chartRows, chartSvg, dayLabel } from './chart'
+import { axisLabel, chartRows, chartSvg, dayLabel } from './chart'
 import { PREFIX, SPANS, START_KEY, addTo, allOutput, costFrom, liveTotals } from './ledger'
 import type { Ledger } from './ledger'
 import type { Series } from './chart'
 import {
   appScene,
+  PIXEL_GRID,
+  scenePixels,
   FLOWS,
   RESTING,
   ROLES,
@@ -114,8 +116,11 @@ const appText = (chars: number) => Math.ceil(chars * APP_TEXT_CELL)
 // Was die Apps selbst dazugeben und keine Schätzung sieht: der Innenabstand der Buttons und
 // `xs` zwischen zweien in einer Zeile. So viele Zellen bleiben in der Leiste frei.
 const APP_SLACK = 3
-// Ohne Svg (VS Code) steht die Szene als Text: rechts neben Clawds neun Spalten so viele.
-const APP_TEXT_REACH = 14
+// Ohne Svg (VS Code) steht die Szene aus Box-Pixeln (scenePixels): Breite in ch, Höhe in lh
+// der Chat-Schrift dort (13 px: rund 8,2 px je ch, 18,2 je lh). Groß je 3 × 3 px wie das
+// 1,5-fache Svg (90 × 42 px), klein je 2 × 2 px wie das 1-fache.
+const APP_PIXEL = { large: { width: 0.37, height: 0.165 }, small: { width: 0.245, height: 0.11 } }
+const APP_CH_PX = 8.2
 const drip = atom({ plugin: 'burn', key: 'drip' } as const, 0)
 // -1 zugedreht, sonst die Stufe wie flowNow; Wasser zeigt die Szene nur, solange es läuft.
 const flow = atom({ plugin: 'burn', key: 'flow' } as const, -1)
@@ -893,6 +898,16 @@ export const register: Register = on => {
     const isApp = e.surface !== 'terminal' && 'Svg' in elements
     const Svg = e.surface !== 'vscode' && 'Svg' in elements ? elements.Svg : undefined
     const columns = e.props.bodyColumns
+    // VS Code zeichnet Text nur in seiner Chat-Schrift (mono gilt dort nicht), Box aber treu:
+    // Spalten und Diagramme stehen dort aus Boxen mit fester Breite in ch.
+    const isBoxApp = e.surface === 'vscode'
+    // So viele ch der Chat-Schrift passen in die Breite (gezählt in Zellen der Code-Schrift).
+    const columnsCh = Math.floor((columns * APP_CELL_PX) / APP_CH_PX)
+    const cellText = (width: number, content: ReturnType<typeof h>, isRight = false) => (
+      <Box width={width} flexShrink={0} justifyContent={isRight ? 'flex-end' : 'flex-start'}>
+        {content}
+      </Box>
+    )
     const blank = <Text>{' '}</Text>
     const currentTab = (await read($, tab)) % 4
     const isStats = currentTab === 1 || currentTab === 2
@@ -961,11 +976,14 @@ export const register: Register = on => {
       const filled = Math.round((Math.min(100, Math.max(0, percent)) / 100) * width)
       const fill = barColor(percent)
 
+      // In VS Code ist eine Zeile 1,4 Schrifthöhen hoch: dort ein halb so hoher Balken.
+      const barLh = isBoxApp ? 0.5 : 1
+
       return isApp ? (
-        <Box flexDirection="row" alignItems="center">
-          <Box flexDirection="row" width={width} height={1}>
-            {filled > 0 && <Box width={filled} height={1} backgroundColor={fill} />}
-            {filled < width && <Box width={width - filled} height={1} backgroundColor="subtle" />}
+        <Box flexDirection="row" alignItems="center" flexWrap={isBoxApp ? 'nowrap' : undefined}>
+          <Box flexDirection="row" width={width} height={barLh} flexWrap={isBoxApp ? 'nowrap' : undefined}>
+            {filled > 0 && <Box width={filled} height={barLh} backgroundColor={fill} />}
+            {filled < width && <Box width={width - filled} height={barLh} backgroundColor="subtle" />}
           </Box>
           <Text>{nb(` ${Math.round(percent)}% used`)}</Text>
         </Box>
@@ -991,7 +1009,12 @@ export const register: Register = on => {
       // unter die Beschriftung, statt in Spalte 0 umzubrechen. `mono`, damit die Flucht
       // auch in den Apps hält; das Terminal ist ohnehin monospaced.
       const line = (label: string, value: string, narrow?: string[]) =>
-        columns >= 64 || (narrow === undefined && 23 + value.length <= columns) ? (
+        (columns >= 64 || (narrow === undefined && 23 + value.length <= columns)) && isBoxApp ? (
+          <Box flexDirection="row" flexWrap="nowrap">
+            {cellText(21, <Text>{nb(label)}</Text>)}
+            <Text tabular>{nb(value)}</Text>
+          </Box>
+        ) : columns >= 64 || (narrow === undefined && 23 + value.length <= columns) ? (
           <Text mono tabular>{nb(`${label.padEnd(23)}${value}`)}</Text>
         ) : (
           <Box flexDirection="column">
@@ -1067,7 +1090,26 @@ export const register: Register = on => {
           {/* Extra: Tokens und Kosten je Zeitraum, dieselben Zahlen wie rechts in der Leiste. */}
           <Text>{nb('Tokens & cost')}</Text>
           {/* Spalten aus Leerzeichen: `mono` hält sie auch in den Apps untereinander. */}
-          {SPANS.map(span => (
+          {isBoxApp &&
+            SPANS.map(span => {
+              const from = costFrom(span.key, trackedSince, nowMs, berlinDay)
+              const name = span.label === 'all time' ? 'All time' : span.label === 'session' ? 'Session' : span.label
+
+              return (
+                <Box flexDirection="row" flexWrap="nowrap">
+                  {cellText(10, <Text>{nb(`  ${name}`)}</Text>)}
+                  {cellText(7, <Text color="claude" tabular>{count(liveTokens[span.key])}</Text>, true)}
+                  {cellText(7, <Text dimColor>{nb(' tokens')}</Text>)}
+                  {from === true
+                    ? cellText(7, <Text color="claude" tabular>{`$${liveMoney[span.key].toFixed(2)}`}</Text>, true)
+                    : cellText(
+                        14,
+                        <Text dimColor>{nb(from === null ? '      –' : `  ${columns >= 50 ? 'cost ' : ''}from ${dayLabel(dateOf(from))}`)}</Text>,
+                      )}
+                </Box>
+              )
+            })}
+          {!isBoxApp && SPANS.map(span => (
             <Text mono>
               <Text>{nb(`  ${(span.label === 'all time' ? 'All time' : span.label === 'session' ? 'Session' : span.label).padEnd(11)}`)}</Text>
               <Text color="claude" tabular>{nb(count(liveTokens[span.key]).padStart(7))}</Text>
@@ -1139,12 +1181,12 @@ export const register: Register = on => {
         over -= cut
       }
       const strip = isApp ? (
-        <Box flexDirection="row" width={width} height={1}>
+        <Box flexDirection="row" width={width} height={isBoxApp ? 0.5 : 1} flexWrap={isBoxApp ? 'nowrap' : undefined}>
           {cells.map(c => (
             // Puffer und Frei getrennt wie ▒ und ░ im Terminal.
             <Box
               width={c.cells}
-              height={1}
+              height={isBoxApp ? 0.5 : 1}
               backgroundColor={c.kind === 'used' ? c.color : c.kind === 'buffer' ? 'inactive' : 'subtle'}
             />
           ))}
@@ -1166,7 +1208,15 @@ export const register: Register = on => {
       const nameWidth = Math.max(10, Math.min(22, columns - 17))
       const fit = (name: string) =>
         name.length > nameWidth ? `${name.slice(0, nameWidth - 1)}…` : name.padEnd(nameWidth)
-      const row = (mark: ReturnType<typeof h>, name: string, value: number) => (
+      const row = (mark: ReturnType<typeof h>, name: string, value: number) =>
+        isBoxApp ? (
+          <Box flexDirection="row" flexWrap="nowrap">
+            {cellText(2, mark)}
+            {cellText(Math.min(20, columnsCh - 16), <Text wrap="truncate-end">{nb(name)}</Text>)}
+            {cellText(7, <Text color="claude" tabular>{count(value)}</Text>, true)}
+            {cellText(7, <Text dimColor tabular>{pct(value)}</Text>, true)}
+          </Box>
+        ) : (
         <Text mono>
           {mark}
           <Text>{nb(` ${fit(name)}`)}</Text>
@@ -1329,11 +1379,41 @@ export const register: Register = on => {
     if (currentTab === 1) {
       // In den Apps ist eine Woche 9 px breit, eine Zelle nur rund 7: dort nach px gerechnet,
       // sonst ragt das Svg im schmalen Fenster (vscode) über den Rand.
-      const weeks = Math.max(8, Math.min(52, Svg !== undefined ? Math.floor((columns * APP_CELL_PX - 26) / 9) : columns - 4))
+      const weeks = Math.max(
+        8,
+        Math.min(52, Svg !== undefined ? Math.floor((columns * APP_CELL_PX - 26) / 9) : isBoxApp ? columnsCh - 5 : columns - 4),
+      )
       const map = heatmap(cache, today, weeks)
+      // In VS Code je Tag ein Kästchen aus Box, je Woche 1 ch breit; leer gedimmt, sonst orange
+      // in vier Stufen der Deckkraft wie das Svg.
+      const shade = (level: number) =>
+        level === 0 ? `${colors.gray}${colors.isLight ? '40' : '30'}` : `${colors.orange}${['', '55', '88', 'BB', 'FF'][level] ?? 'FF'}`
+      const square = (level: number) => (
+        <Box width={1} height={0.8} flexShrink={0} alignItems="center" justifyContent="center">
+          {level >= 0 && <Box width={0.75} height={0.62} backgroundColor={shade(level)} />}
+        </Box>
+      )
 
       let chart: ReturnType<typeof h>
-      if (!isApp || Svg === undefined) {
+      if (isBoxApp) {
+        const months = map.months.filter(month => month.week < weeks)
+        chart = (
+          <Box flexDirection="column">
+            <Box flexDirection="row" flexWrap="nowrap">
+              <Box width={4 + (months[0]?.week ?? weeks)} flexShrink={0} />
+              {months.map((month, i) => cellText((months[i + 1]?.week ?? weeks) - month.week, <Text dimColor wrap="truncate-end">{month.label}</Text>))}
+            </Box>
+            {WEEKDAY_LABELS.map((day, row) => (
+              <Box flexDirection="row" flexWrap="nowrap" alignItems="center" height={0.8}>
+                <Box width={4} height={0.8} flexShrink={0} alignItems="center">
+                  <Text dimColor>{nb(day)}</Text>
+                </Box>
+                {map.levels.map(column => square(column[row] ?? -1))}
+              </Box>
+            ))}
+          </Box>
+        )
+      } else if (!isApp || Svg === undefined) {
         const monthRow = Array.from({ length: weeks }, () => ' ')
         for (const month of map.months) {
           if (month.week + 3 <= weeks && monthRow.slice(month.week, month.week + 4).every(c => c === ' ')) {
@@ -1403,11 +1483,20 @@ export const register: Register = on => {
           {blank}
           {chart}
           {blank}
-          <Text mono>
-            <Text>{nb('    Less ')}</Text>
-            <Text color="claude">{nb('░ ▒ ▓ █')}</Text>
-            <Text>{nb(' More')}</Text>
-          </Text>
+          {isBoxApp ? (
+            <Box flexDirection="row" flexWrap="nowrap" alignItems="center">
+              <Box width={4} flexShrink={0} />
+              <Text dimColor>{nb('Less ')}</Text>
+              {[0, 1, 2, 3, 4].map(square)}
+              <Text dimColor>{nb(' More')}</Text>
+            </Box>
+          ) : (
+            <Text mono>
+              <Text>{nb('    Less ')}</Text>
+              <Text color="claude">{nb('░ ▒ ▓ █')}</Text>
+              <Text>{nb(' More')}</Text>
+            </Text>
+          )}
           {blank}
           {ranges}
           {blank}
@@ -1491,8 +1580,41 @@ export const register: Register = on => {
     }))
     const all = ids.reduce((sum, id) => sum + totalOf(id), 0) || 1
 
-    const lineChart =
-      isApp && Svg !== undefined ? (
+    // In VS Code: je Tag ein Balken aus Box, die Modelle übereinander in ihren Farben, das
+    // erste unten; links die Achse, darunter erster und letzter Tag.
+    const CHART_LH = 5
+    const dayTotals = dayList.map((_, day) => series.reduce((sum, one) => sum + (one.values[day] ?? 0), 0))
+    const chartMax = Math.max(1, ...dayTotals)
+    const barCh = Math.max(0.4, Math.min(1.5, Math.floor(((columnsCh - 8) / Math.max(1, dayList.length)) * 10) / 10))
+    const boxChart = (
+      <Box flexDirection="column">
+        <Box flexDirection="row" flexWrap="nowrap" alignItems="flex-end" height={CHART_LH}>
+          <Box flexDirection="column" justifyContent="space-between" height={CHART_LH} width={6} flexShrink={0}>
+            <Text dimColor>{axisLabel(chartMax)}</Text>
+            <Text dimColor>0</Text>
+          </Box>
+          {dayList.map((_, day) => (
+            <Box flexDirection="column" justifyContent="flex-end" width={barCh} height={CHART_LH} flexShrink={0}>
+              {[...series].reverse().map(one => {
+                const value = one.values[day] ?? 0
+                return value > 0 ? (
+                  <Box width={Math.round(barCh * 0.8 * 100) / 100} height={Math.max(0.05, Math.round(((value / chartMax) * CHART_LH) * 100) / 100)} backgroundColor={one.color} />
+                ) : null
+              })}
+            </Box>
+          ))}
+        </Box>
+        <Box flexDirection="row" flexWrap="nowrap" width={6 + barCh * dayList.length}>
+          <Box width={6} flexShrink={0} />
+          <Text dimColor>{dayLabel(dayList[0] ?? today)}</Text>
+          <Box flexGrow={1} />
+          <Text dimColor>{dayLabel(dayList[dayList.length - 1] ?? today)}</Text>
+        </Box>
+      </Box>
+    )
+    const lineChart = isBoxApp ? (
+      boxChart
+    ) : isApp && Svg !== undefined ? (
         (() => {
           const svg = chartSvg(series, dayList, colors.gray)
           // Das Diagramm hat feste px; im schmalen Fenster maßstäblich kleiner, die viewBox hält das Verhältnis.
@@ -1658,15 +1780,40 @@ export const register: Register = on => {
       (liveMoney === '' ? 0 : liveMoney.length + ' · '.length) + liveArrow.length + liveValue.length + liveRest.length
     const reach = 1 + liveWidth
     const lane = arrivalAt < 0 ? 0 : Math.max(0, Math.min(24, e.props.bodyColumns - 6 - TAP_WIDTH - reach))
-    // Als Text in den Apps: die drei Zeilen des Terminals als Block, rechts so breit wie die
-    // breiteste Szene (der volle Pool); die Liter stehen daneben wie beim Svg.
-    const drawn = isTerminal
-      ? terminalScene(scene, lane, reach)
-      : isTextApp
-        ? terminalScene({ ...scene, liters: '' }, 0, APP_TEXT_REACH)
-        : null
-    // In den Apps 1,5-fach oder, wenn es eng wird, 1-fach (siehe appPlan); als Text der Block
-    // aus drei Zeilen oder nur Clawds eine Zeile.
+    const drawn = isTerminal ? terminalScene(scene, lane, reach) : null
+    // VS Code: jede Pixelzeile eine Box, darin je Lauf gleicher Farbe eine Box (leer, wo nichts
+    // ist). nowrap, sonst bräche VS Code eine Zeile um; so bleiben es rund 130 Knoten.
+    const pixelPart = (scale: number) => {
+      const size = scale > 1 ? APP_PIXEL.large : APP_PIXEL.small
+      const across = (n: number) => Math.round(n * size.width * 1000) / 1000
+
+      return (
+        <Box key="hahn" flexDirection="column" width={across(PIXEL_GRID.cols)} flexShrink={0}>
+          {scenePixels(scene, tapColors).map(row => {
+            const runs: { color: string | null; n: number }[] = []
+            for (const color of row.slice(0, row.findLastIndex(c => c !== null) + 1)) {
+              const last = runs[runs.length - 1]
+              if (last !== undefined && last.color === color) last.n += 1
+              else runs.push({ color, n: 1 })
+            }
+
+            return (
+              <Box flexDirection="row" flexWrap="nowrap" height={size.height}>
+                {runs.map(run =>
+                  run.color === null ? (
+                    <Box width={across(run.n)} height={size.height} flexShrink={0} />
+                  ) : (
+                    <Box width={across(run.n)} height={size.height} flexShrink={0} backgroundColor={run.color} />
+                  ),
+                )}
+              </Box>
+            )
+          })}
+        </Box>
+      )
+    }
+    // In den Apps 1,5-fach oder, wenn es eng wird, 1-fach (siehe appPlan); in VS Code aus
+    // Box-Pixeln, groß oder klein.
     const tapPart = (scale = 1.5) =>
       !isTerminal && Svg !== undefined ? (
         <Svg
@@ -1676,17 +1823,8 @@ export const register: Register = on => {
           height={appScene(scale).height}
           source={sceneSvg(scene, tapColors)}
         />
-      ) : isTextApp && drawn !== null && scale > 1 ? (
-        <Box key="hahn" flexDirection="column">
-          <Text size="footnote" mono>
-            {pieces([...drawn.head, { text: ' '.repeat(APP_TEXT_REACH) }])}
-          </Text>
-          {drawn.rows.map(row => (
-            <Text size="footnote" mono>
-              {pieces([...row.slot, ...row.right])}
-            </Text>
-          ))}
-        </Box>
+      ) : isTextApp ? (
+        pixelPart(scale)
       ) : (
       // Mit drei Zeilen steht hier der Kopf, sonst Clawd selbst.
       <Box key="hahn">
@@ -1790,9 +1928,7 @@ export const register: Register = on => {
       (step.scale === 0
         ? 0
         : isTextApp
-          ? step.scale > 1
-            ? SLOT + APP_TEXT_REACH
-            : SLOT
+          ? appCells(PIXEL_GRID.cols * (step.scale > 1 ? APP_PIXEL.large : APP_PIXEL.small).width * APP_CH_PX)
           : appCells(appScene(step.scale).width))
     const appPlan = (left: (detail: string | undefined) => number, details: string[]): AppPlan => {
       const options = [...details, undefined]
@@ -1856,16 +1992,19 @@ export const register: Register = on => {
     // Clawd würde gestaucht, der Zähler zerrissen. Liegt die Schätzung daneben, gibt die
     // Lücke nach, dann kürzen sich links die Details; was dann noch übersteht,
     // schneidet die Zeile am Rand ab, statt darüber hinaus zu zeichnen.
+    // VS Code bricht Zeilen-Boxen sonst um (flex-wrap: wrap); die Leiste bleibt eine Zeile.
+    const oneLine = isTextApp ? { flexWrap: 'nowrap' as const } : {}
     const appRight = (plan: AppPlan) => [
       <Box flexGrow={1} />,
       plan.hasTap && (
-        <Box flexDirection="row" alignItems="center" flexShrink={0}>
+        <Box flexDirection="row" alignItems="center" flexShrink={0} {...oneLine}>
           {tapPart(plan.scale)}
           {plan.withLiters && literPart}
         </Box>
       ),
       <Text>{nb(plan.hasTap ? '  ' : '   ')}</Text>,
-      <Box flexDirection="row" alignItems="center" flexShrink={0}>
+      // Text und Knopf gemeinsam mittig: VS Code setzt Knöpfe sonst oben an (flex-start).
+      <Box flexDirection="row" alignItems="center" flexShrink={0} {...oneLine}>
         {appCounter(plan.withMoney)}
       </Box>,
     ]
@@ -1873,12 +2012,12 @@ export const register: Register = on => {
       plan.isStacked ? (
         <Box flexDirection="column" overflow="hidden">
           {left}
-          <Box flexDirection="row" alignItems="center" overflow="hidden">
+          <Box flexDirection="row" alignItems="center" overflow="hidden" {...oneLine}>
             {appRight(plan)}
           </Box>
         </Box>
       ) : (
-        <Box flexDirection="row" alignItems="center" overflow="hidden">
+        <Box flexDirection="row" alignItems="center" overflow="hidden" {...oneLine}>
           {left}
           {appRight(plan)}
         </Box>
@@ -1893,7 +2032,7 @@ export const register: Register = on => {
       return appBand(
         plan,
         // minWidth 0: sonst hielte der Text links seine volle Breite, statt sein Ende zu kürzen.
-        <Box flexDirection="row" alignItems="center" flexShrink={1} minWidth={0}>
+        <Box flexDirection="row" alignItems="center" flexShrink={1} minWidth={0} {...oneLine}>
           <Text size="footnote" wrap="truncate-end">
             <Text color="claude">{nb(MARK)}</Text>
             <Text dimColor>{nb(plan.detail ?? '')}</Text>
@@ -1937,7 +2076,7 @@ export const register: Register = on => {
       : appPlan(
           text =>
             appText(fixed - barCells - (text === undefined ? separator.length : 0) + (text?.length ?? 0)) +
-            (shown.percent === null ? 0 : Svg !== undefined ? appCells(APP_BAR.width) : BAR_WIDTH),
+            (shown.percent === null ? 0 : Svg !== undefined ? appCells(APP_BAR.width) : appCells(BAR_WIDTH * APP_CH_PX)),
           shown.details,
         )
     const detail = plan === null ? termDetail : plan.detail
@@ -1992,7 +2131,7 @@ export const register: Register = on => {
     ) : (
       // Schrumpft als Erstes, wenn die Schätzung zu knapp war; minWidth 0, sonst hielte jeder
       // Text seine volle Breite, und das Kürzen unten griffe nie.
-      <Box flexDirection="row" alignItems="center" flexShrink={1} minWidth={0}>
+      <Box flexDirection="row" alignItems="center" flexShrink={1} minWidth={0} {...oneLine}>
         <Text size="footnote" wrap="truncate-end">
           <Text color="claude">{nb(MARK)}</Text>
           <Text>{nb(label)}</Text>
@@ -2007,9 +2146,12 @@ export const register: Register = on => {
               source={appBar(shown.percent, shown.isStale, colors)}
             />
           ) : (
-            <Box flexDirection="row" width={BAR_WIDTH} height={1} flexShrink={0}>
-              {filled > 0 && <Box width={filled} height={1} backgroundColor={color ?? 'inactive'} />}
-              {filled < BAR_WIDTH && <Box width={BAR_WIDTH - filled} height={1} backgroundColor="subtle" />}
+            // In VS Code flach wie der Svg-Strich: 0,3 Zeilen hoch statt einer ganzen.
+            <Box flexDirection="row" width={BAR_WIDTH} height={isTextApp ? 0.3 : 1} flexShrink={0} {...oneLine}>
+              {filled > 0 && <Box width={filled} height={isTextApp ? 0.3 : 1} backgroundColor={color ?? 'inactive'} />}
+              {filled < BAR_WIDTH && (
+                <Box width={BAR_WIDTH - filled} height={isTextApp ? 0.3 : 1} backgroundColor="subtle" />
+              )}
             </Box>
           ))}
         {/* Liegt die Schätzung daneben, kürzt das Detail sein Ende, statt umzubrechen. */}
@@ -2025,9 +2167,9 @@ export const register: Register = on => {
     if (plan !== null) {
       return appBand(
         plan,
-        <Box flexDirection="row" alignItems="center" flexShrink={1} minWidth={0}>
+        <Box flexDirection="row" alignItems="center" flexShrink={1} minWidth={0} {...oneLine}>
           {limits}
-          <Box flexDirection="row" alignItems="center" flexShrink={0}>
+          <Box flexDirection="row" alignItems="center" flexShrink={0} {...oneLine}>
             {controls}
           </Box>
         </Box>,

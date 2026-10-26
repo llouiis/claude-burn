@@ -497,50 +497,58 @@ const crisp = (inner: string) => `<g shape-rendering="crispEdges">${inner}</g>`
 // kneift unter der Dusche die Augen zu, `isSitting` lässt in der Wanne die Beine weg.
 const CAP_PINK = '#F2A7C3'
 const TOWEL = '#F4F1EA'
-function clawdPx(role: Role, step: number, isSinging = false, isSitting = false): string {
+// Ein Pixelrechteck der Szene: x, y, Breite, Höhe, Farbe. Svg und die Box-Pixel für VS Code
+// zeichnen aus denselben Listen.
+type Shape = [number, number, number, number, string]
+const pxOf = (shapes: Shape[]) => shapes.map(([x, y, w, h, c]) => px(x, y, w, h, c)).join('')
+function clawdShapes(role: Role, step: number, isSinging = false, isSitting = false): Shape[] {
   const legs = [8, 12, 18, 22]
-  const parts = [
-    px(4, 15, 4, 4, INK.clay),
-    px(8, 12, 16, 10, INK.clay),
-    px(24, 15, 4, 4, INK.clay),
-    isSinging ? px(10, 15, 2, 1, INK.ink) + px(20, 15, 2, 1, INK.ink) : px(10, 14, 2, 2, INK.ink) + px(20, 14, 2, 2, INK.ink),
-    ...(isSitting ? [] : legs.map((x, i) => px(x, 22 - (step % 2 === 1 && i % 2 === 1 ? 1 : 0), 2, 4, INK.clay))),
+  const parts: Shape[] = [
+    [4, 15, 4, 4, INK.clay],
+    [8, 12, 16, 10, INK.clay],
+    [24, 15, 4, 4, INK.clay],
+    ...(isSinging
+      ? ([[10, 15, 2, 1, INK.ink], [20, 15, 2, 1, INK.ink]] satisfies Shape[])
+      : ([[10, 14, 2, 2, INK.ink], [20, 14, 2, 2, INK.ink]] satisfies Shape[])),
+    ...(isSitting ? [] : legs.map((x, i): Shape => [x, 22 - (step % 2 === 1 && i % 2 === 1 ? 1 : 0), 2, 4, INK.clay])),
   ]
   if (role === 'shower') {
     // Rosa Duschhaube mit weißen Tupfen und Rüschenrand
     parts.push(
-      px(11, 8, 10, 1, CAP_PINK),
-      px(9, 9, 14, 3, CAP_PINK),
-      px(8, 11.5, 16, 1, '#E58BAE'),
-      px(12, 9.5, 1, 1, TOWEL),
-      px(16, 9, 1, 1, TOWEL),
-      px(20, 10, 1, 1, TOWEL),
+      [11, 8, 10, 1, CAP_PINK],
+      [9, 9, 14, 3, CAP_PINK],
+      [8, 11.5, 16, 1, '#E58BAE'],
+      [12, 9.5, 1, 1, TOWEL],
+      [16, 9, 1, 1, TOWEL],
+      [20, 10, 1, 1, TOWEL],
     )
   } else if (role === 'pool') {
     // Sonnenbrille, Düse in der vorderen Schere
     parts.push(
-      px(9, 13.5, 5, 2.5, INK.ink),
-      px(18, 13.5, 5, 2.5, INK.ink),
-      px(14, 14, 4, 0.8, INK.ink),
-      px(10, 14, 1.5, 0.6, INK.silver),
-      px(19, 14, 1.5, 0.6, INK.silver),
-      px(27, 16, 1, 2, INK.leaf),
-      px(28, 16, 4, 2, INK.brass),
-      px(32, 16.5, 2, 1, INK.tip),
+      [9, 13.5, 5, 2.5, INK.ink],
+      [18, 13.5, 5, 2.5, INK.ink],
+      [14, 14, 4, 0.8, INK.ink],
+      [10, 14, 1.5, 0.6, INK.silver],
+      [19, 14, 1.5, 0.6, INK.silver],
+      [27, 16, 1, 2, INK.leaf],
+      [28, 16, 4, 2, INK.brass],
+      [32, 16.5, 2, 1, INK.tip],
     )
   } else if (role === 'lake') {
     // Strohhut mit grünem Band
     parts.push(
-      px(11, 6, 10, 1, INK.straw),
-      px(10, 7, 12, 3, INK.straw),
-      px(10, 9, 12, 1, INK.leaf),
-      px(4, 10, 24, 1, INK.strawDark),
-      px(5, 11, 22, 1, INK.straw),
+      [11, 6, 10, 1, INK.straw],
+      [10, 7, 12, 3, INK.straw],
+      [10, 9, 12, 1, INK.leaf],
+      [4, 10, 24, 1, INK.strawDark],
+      [5, 11, 22, 1, INK.straw],
     )
   }
 
-  return crisp(parts.join(''))
+  return parts
 }
+const clawdPx = (role: Role, step: number, isSinging = false, isSitting = false) =>
+  crisp(pxOf(clawdShapes(role, step, isSinging, isSitting)))
 // Was Clawd herbeiträgt: ein Handtuch über der Schulter oder den aufgerollten Gartenschlauch.
 const towelPx = crisp(px(5, 11.5, 6, 1.2, TOWEL) + px(5, 12.7, 2, 6, TOWEL) + px(5, 16, 2, 0.6, INK.red))
 const coilPx = [2.4, 1.3].map(r => `<circle cx="30" cy="18" r="${r}" fill="none" stroke="${INK.leaf}" stroke-width="0.9"/>`).join('')
@@ -609,27 +617,32 @@ function sinkSvg(scene: Scene, colors: SceneColors, isOpen: boolean): string {
 // Clawd am Hahn: das Handy in der vorderen Schere, der Blick gesenkt. `comfort` 0 steht er,
 // 1 sitzt er auf dem Hocker, 2 liegt er im Liegestuhl, 3 dazu unterm Sonnenschirm mit Drink.
 const SCREEN = '#9FD8FF'
-function idlerPx(comfort: number, step: number, tick: number): string {
+// Clawd am Handy, ohne die scrollende Zeile (die hat im Svg eine Deckkraft).
+function idlerShapes(comfort: number, step: number): Shape[] {
   const lift = (i: number) => (step % 2 === 1 && i % 2 === 1 ? 1 : 0)
   // Stehend vier Beine, auf dem Hocker baumeln zwei, im Liegestuhl sind sie angezogen.
-  const legs =
+  const legs: Shape[] =
     comfort === 0
-      ? [8, 12, 18, 22].map((x, i) => px(x, 22 - lift(i), 2, 4, INK.clay))
+      ? [8, 12, 18, 22].map((x, i): Shape => [x, 22 - lift(i), 2, 4, INK.clay])
       : comfort === 1
-        ? [px(10, 22, 2, 2.5, INK.clay), px(20, 22, 2, 2.5, INK.clay)]
+        ? [[10, 22, 2, 2.5, INK.clay], [20, 22, 2, 2.5, INK.clay]]
         : []
-  const shape = [
-    px(4, 15, 4, 4, INK.clay),
-    px(8, 12, 16, 10, INK.clay),
-    px(24, 15, 2, 3, INK.clay),
-    px(11, 15, 2, 1.2, INK.ink),
-    px(19, 15, 2, 1.2, INK.ink),
+
+  return [
+    [4, 15, 4, 4, INK.clay],
+    [8, 12, 16, 10, INK.clay],
+    [24, 15, 2, 3, INK.clay],
+    [11, 15, 2, 1.2, INK.ink],
+    [19, 15, 2, 1.2, INK.ink],
     ...legs,
-    // Das Handy: dunkle Hülle, das Display leuchtet, eine Zeile scrollt durch.
-    px(25.6, 12, 2.8, 4.6, INK.boot),
-    px(26, 12.5, 2, 3.6, SCREEN),
-    px(26, 12.6 + (tick % 4) * 0.8, 2, 0.4, '#FFFFFF', ' fill-opacity="0.8"'),
-  ].join('')
+    // Das Handy: dunkle Hülle, das Display leuchtet.
+    [25.6, 12, 2.8, 4.6, INK.boot],
+    [26, 12.5, 2, 3.6, SCREEN],
+  ]
+}
+function idlerPx(comfort: number, step: number, tick: number): string {
+  // Eine Zeile scrollt über das Display.
+  const shape = pxOf(idlerShapes(comfort, step)) + px(26, 12.6 + (tick % 4) * 0.8, 2, 0.4, '#FFFFFF', ' fill-opacity="0.8"')
   const body = crisp(shape)
   if (comfort === 0) return body
   if (comfort === 1) {
@@ -681,6 +694,7 @@ function showerBackSvg(colors: SceneColors): string {
     `<circle cx="33.3" cy="16" r="1.3" fill="${INK.red}"/>`
   )
 }
+const STEAM_PUFFS: [number, number, number][] = [[4, 23, 3], [30, 20, 3.5], [6, 8, 3], [27, 8, 3.5], [16, 25, 3.5], [1.5, 15, 2.6], [36, 12, 4], [24, 25, 3.2], [13, 4, 3.5], [40, 5, 4]]
 function showerSvg(scene: Scene, colors: SceneColors, isHere: boolean): string {
   const { water, strength, tick, level } = scene
   const wet = `fill="${colors.suggestion}"`
@@ -723,9 +737,8 @@ function showerSvg(scene: Scene, colors: SceneColors, isHere: boolean): string {
   // Dampfschwaden: mit jeder Stufe einer mehr und alle dichter. Sie ziehen um Clawd herum,
   // über der Haube und unten um die Beine, sein Gesicht (x 8 bis 24, y 12 bis 19) bleibt frei.
   // Auf hellem Grund ist der Dampf grau statt weiß.
-  const puffs: [number, number, number][] = [[4, 23, 3], [30, 20, 3.5], [6, 8, 3], [27, 8, 3.5], [16, 25, 3.5], [1.5, 15, 2.6], [36, 12, 4], [24, 25, 3.2], [13, 4, 3.5], [40, 5, 4]]
   const puff = colors.isLight === true ? INK.concrete : '#FFFFFF'
-  const steam = puffs
+  const steam = STEAM_PUFFS
     .slice(0, Math.min(10, level))
     .map(([x, y, r], i) => `<circle cx="${x + ((tick + i) % 2) * 0.4}" cy="${y}" r="${r}" fill="${puff}" fill-opacity="${(0.08 + Math.min(10, level) * 0.025).toFixed(2)}"/>`)
     .join('')
@@ -973,6 +986,316 @@ export function sceneSvg(scene: Scene, colors: SceneColors): string {
   const soft = (inner: string) => (arrival >= 0 && inner !== '' ? `<g mask="url(#burn-einfahrt)">${inner}</g>` : inner)
 
   return `<svg xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMin meet" viewBox="${x} ${y} ${width} ${height}">${fade}${back.join('')}${soft(clawd)}${front.join('')}</svg>`
+}
+
+// ---------- Apps ohne Svg (VS Code) ----------
+// VS Code zeichnet in der Leiste keine Svg und Text nur in seiner Chat-Schrift, Box aber treu.
+// Dort steht dieselbe Szene aus Box-Pixeln: ein Raster aus 2 × 2 Szeneneinheiten (30 × 14 Pixel
+// ab y 2, also Clawd 12 × 7), gemalt aus denselben Rechtecken wie das Svg; Kurven, Ellipsen
+// und Linien werden zu Pixeln gerundet. Jede Zelle hat eine Farbe (Hex, auch mit Deckkraft)
+// oder bleibt leer.
+export const PIXEL_GRID = { cols: 30, rows: 14, unit: 2, top: 2 }
+export type Pixels = (string | null)[][]
+// x' = a·x + c·y + e, y' = b·x + d·y + f wie Svgs matrix()
+type Matrix = [number, number, number, number, number, number]
+const IDENTITY: Matrix = [1, 0, 0, 1, 0, 0]
+const times = (m: Matrix, n: Matrix): Matrix => [
+  m[0] * n[0] + m[2] * n[1],
+  m[1] * n[0] + m[3] * n[1],
+  m[0] * n[2] + m[2] * n[3],
+  m[1] * n[2] + m[3] * n[3],
+  m[0] * n[4] + m[2] * n[5] + m[4],
+  m[1] * n[4] + m[3] * n[5] + m[5],
+]
+const moved = (x: number, y: number): Matrix => [1, 0, 0, 1, x, y]
+function turned(degrees: number, cx: number, cy: number): Matrix {
+  const r = (degrees * Math.PI) / 180
+
+  return times(moved(cx, cy), times([Math.cos(r), Math.sin(r), -Math.sin(r), Math.cos(r), 0, 0], moved(-cx, -cy)))
+}
+function inverse(m: Matrix): Matrix {
+  const det = m[0] * m[3] - m[1] * m[2]
+
+  return [m[3] / det, -m[1] / det, -m[2] / det, m[0] / det, (m[2] * m[5] - m[3] * m[4]) / det, (m[1] * m[4] - m[0] * m[5]) / det]
+}
+const apply = (m: Matrix, x: number, y: number): [number, number] => [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]]
+const withAlpha = (hex: string, alpha: number) => `${hex}${Math.round(Math.max(0, Math.min(1, alpha)) * 255).toString(16).padStart(2, '0')}`
+
+// Malt Formen ins Raster: je Zelle 3 × 3 Stichproben; trifft die Form mindestens `need` davon,
+// nimmt die Zelle ihre Farbe. Später Gemaltes liegt oben.
+function painter() {
+  const { cols, rows, unit, top } = PIXEL_GRID
+  const grid: Pixels = Array.from({ length: rows }, () => Array.from({ length: cols }, (): string | null => null))
+  let matrix = IDENTITY
+  const paint = (inside: (x: number, y: number) => boolean, box: [number, number, number, number], color: string, need: number) => {
+    const back = inverse(matrix)
+    const corners = [apply(matrix, box[0], box[1]), apply(matrix, box[2], box[1]), apply(matrix, box[0], box[3]), apply(matrix, box[2], box[3])]
+    const c0 = Math.max(0, Math.floor(Math.min(...corners.map(p => p[0])) / unit))
+    const c1 = Math.min(cols - 1, Math.floor(Math.max(...corners.map(p => p[0])) / unit))
+    const r0 = Math.max(0, Math.floor((Math.min(...corners.map(p => p[1])) - top) / unit))
+    const r1 = Math.min(rows - 1, Math.floor((Math.max(...corners.map(p => p[1])) - top) / unit))
+    for (let r = r0; r <= r1; r += 1) {
+      for (let c = c0; c <= c1; c += 1) {
+        let hits = 0
+        for (let i = 0; i < 3; i += 1) {
+          for (let j = 0; j < 3; j += 1) {
+            const [x, y] = apply(back, c * unit + ((i + 0.5) * unit) / 3, top + r * unit + ((j + 0.5) * unit) / 3)
+            if (inside(x, y)) hits += 1
+          }
+        }
+        const row = grid[r]
+        if (hits >= need && row !== undefined) row[c] = color
+      }
+    }
+  }
+  const rect = (x: number, y: number, w: number, h: number, color: string, need = 4) =>
+    paint((px, py) => px >= x && px < x + w && py >= y && py < y + h, [x, y, x + w, y + h], color, need)
+  const oval = (cx: number, cy: number, rx: number, ry: number, color: string, need = 4) =>
+    paint((x, y) => ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2 <= 1, [cx - rx, cy - ry, cx + rx, cy + ry], color, need)
+  // Eine Linie so breit wie `width`, mindestens aber so, dass sie eine Zelle trifft.
+  const line = (x1: number, y1: number, x2: number, y2: number, width: number, color: string) => {
+    const half = Math.max(width, 1) / 2
+    const dx = x2 - x1
+    const dy = y2 - y1
+    const length = dx * dx + dy * dy || 1
+    paint(
+      (x, y) => {
+        const t = Math.max(0, Math.min(1, ((x - x1) * dx + (y - y1) * dy) / length))
+        return (x - x1 - t * dx) ** 2 + (y - y1 - t * dy) ** 2 <= half * half
+      },
+      [Math.min(x1, x2) - half, Math.min(y1, y2) - half, Math.max(x1, x2) + half, Math.max(y1, y2) + half],
+      color,
+      2,
+    )
+  }
+  const shapes = (list: Shape[], need = 4) => list.forEach(([x, y, w, h, c]) => rect(x, y, w, h, c, need))
+  const within = (m: Matrix, draw: () => void) => {
+    const was = matrix
+    matrix = times(matrix, m)
+    draw()
+    matrix = was
+  }
+
+  return { grid, rect, oval, line, shapes, within }
+}
+
+export function scenePixels(scene: Scene, colors: SceneColors): Pixels {
+  const { role, water, strength, tick, level, arrival } = scene
+  const isHere = arrival < 0
+  const isOn = isHere && water !== null
+  const isLight = colors.isLight === true
+  const p = painter()
+  const wet = colors.suggestion
+  // Weißes bekommt auf hellem Grund einen grauen Ton, sonst ginge es unter.
+  const white = isLight ? INK.concreteTop : INK.silver
+  const walked = Math.min(1, Math.max(0, arrival) / ARRIVE.in)
+  const step = arrival >= 0 && walked < 1 ? arrival : 0
+  const walkIn = (draw: () => void) => p.within(moved(-32 * (1 - walked), 0), draw)
+
+  // Wasser senkrecht von `from` bis `to`: ein Tropfen, ein wandernder Strahl oder ein Spritzer.
+  const fall = (x: number, from: number, to: number) => {
+    if (!isOn || water === null) return
+    if (water.drop !== null) {
+      p.rect(x - 1, from + 1 + ((to - from - 2) * water.drop) / 2, 2, 2, wet, 3)
+    } else if (water.jet > 0) {
+      for (let y = from; y < to; y += 2) {
+        if ((Math.round(y / 2) + tick) % 3 !== 0) p.rect(x - (strength === 3 ? 1 : 0.7), y, strength === 3 ? 2 : 1.4, 2, wet, 2)
+      }
+    } else if (water.isSplash) {
+      p.rect(x - 3, to - 1, 6, 1.4, wet, 2)
+    }
+  }
+
+  if (role === 'tap') {
+    // Das Becken auf dem Standfuß, der Hahn mit rotem Hebel.
+    p.rect(45, 21.5, 4, GROUND - 21.5, INK.concrete)
+    p.rect(51.5, 10, 2, 8, INK.concrete)
+    p.rect(46.4, 10, 7.1, 1.6, INK.concreteTop, 3)
+    p.rect(46.4, 11.6, 1.6, 2, INK.concreteTop, 3)
+    if (isTapOpen(arrival)) p.line(52.5, 10, 55.5, 7.3, 1.3, INK.red)
+    else p.line(52.5, 10, 56.5, 10, 1.3, INK.red)
+    p.rect(37, 18.6, 20, 2.4, white)
+    p.rect(39.5, 21, 15, 2, white)
+    p.rect(36.6, 17.8, 20.8, 1, isLight ? INK.concrete : INK.flourDark, 3)
+    fall(SPOUT.x, SPOUT.y, DRAIN.y)
+    const comfort = comfortOf(level)
+    if (!isHere) {
+      walkIn(() => p.shapes(idlerShapes(0, step)))
+    } else if (comfort === 0) {
+      p.shapes(idlerShapes(0, 0))
+    } else if (comfort === 1) {
+      p.within(moved(0, 2), () => p.shapes(idlerShapes(1, 0)))
+      p.rect(6, 24.6, 20, 1.4, INK.wood, 3)
+      p.rect(7.5, 26, 1.4, GROUND - 26, INK.crust, 2)
+      p.rect(23.1, 26, 1.4, GROUND - 26, INK.crust, 2)
+    } else {
+      if (comfort === 3) {
+        // Sonnenschirm, rot mit weißer Mitte, und der Drink.
+        p.line(2.5, 4.5, 2.5, GROUND, 0.9, INK.concrete)
+        p.rect(-9, 6, 23, 3, INK.red)
+        p.rect(-1, 5, 7, 2, INK.silver, 3)
+        p.rect(29.5, 22.2, 5, 1, INK.wood, 3)
+        p.rect(31.5, 23, 1, GROUND - 23, INK.crust, 2)
+        p.rect(30, 18, 4, 2.4, SCREEN, 3)
+        p.oval(30.3, 18, 1, 1, INK.orange, 2)
+      }
+      // Liegestuhl: Rücken und Sitz gestreift, Clawd lehnt sich gedreht hinein.
+      p.line(4, 13, 11, 24.5, 3.2, INK.wood)
+      p.line(11, 24.5, 28, 24.5, 3.2, INK.red)
+      p.line(11, 24.5, 8, GROUND, 1, INK.crust)
+      p.line(28, 24.5, 28, GROUND, 1, INK.crust)
+      p.within(times(moved(3, 3), turned(-24, 16, 22)), () => p.shapes(idlerShapes(2, 0)))
+    }
+  } else if (role === 'shower') {
+    // Rohr, Brausekopf, Duschwanne; der Dampf zieht hinter Clawd, das Gesicht bleibt frei.
+    p.rect(32.5, 3.6, 1.6, GROUND - 3.6, INK.concrete, 3)
+    p.rect(16, 3.6, 18, 1.2, INK.concreteTop, 3)
+    p.rect(11, 3.8, 10, 1.2, INK.concreteTop, 3)
+    p.rect(0.5, GROUND - 1, 35, 1, isLight ? INK.concrete : TOWEL, 3)
+    p.oval(33.3, 16, 1.3, 1.3, INK.red, 2)
+    const puff = isLight ? INK.concrete : '#FFFFFF'
+    for (const [x, y, r] of STEAM_PUFFS.slice(0, Math.min(10, level))) {
+      p.oval(x, y, r, r, withAlpha(puff, 0.1 + Math.min(10, level) * 0.03))
+    }
+    if (!isHere) {
+      walkIn(() => {
+        p.shapes(clawdShapes('shower', step))
+        if (walked < 1) p.shapes([[5, 11.5, 6, 1.2, TOWEL], [5, 12.7, 2, 6, TOWEL]], 3)
+      })
+    } else {
+      p.shapes(clawdShapes('shower', 0, isOn))
+    }
+    if (isOn && water !== null) {
+      if (water.drop !== null) {
+        for (const x of [13, 17, 21].filter((_, i) => i % 2 === tick % 2)) p.rect(x - 1, 6 + water.drop, 2, 2, wet, 3)
+      } else if (water.jet > 0) {
+        for (const x of [13, 17, 21]) p.rect(x - 0.6, 5 + (tick % 2), 1.2, 2, wet, 2)
+        for (let y = 12; y < GROUND - 1; y += 2) if ((y / 2 + tick) % 3 !== 0) for (const x of [6.5, 25.5]) p.rect(x - 0.6, y, 1.2, 2, wet, 2)
+      }
+      // Eine Note steigt rechts auf.
+      p.rect(27 + (tick % 4) * 0.6, 9 - (tick % 4) * 1.6, 2, 2, INK.gold, 3)
+    }
+  } else if (role === 'pool') {
+    // Aufstellpool mit durchsichtiger Wand, Pegel nach der Sitzung, Ente ab 6, Überlauf ab 9.
+    const { left, right, top } = POOL_BOX
+    const width = right - left
+    const depth = (GROUND - top - 1) * (Math.min(8, level) / 8)
+    const surface = GROUND - depth
+    if (level >= 9) {
+      p.oval(48, GROUND, 14 + (level - 9) * 3, 0.9, withAlpha(wet, 0.4), 3)
+      p.line(left - 0.6, top, left - 0.6, GROUND, 0.8, wet)
+      p.line(right + 0.6, top, right + 0.6, GROUND, 0.8, wet)
+    }
+    p.rect(left, top, width, GROUND - top, withAlpha(INK.denim, 0.3))
+    if (depth > 0) p.rect(left, surface, width, depth, withAlpha(wet, 0.75), 3)
+    for (const x of [left - 0.5, (left + right) / 2 - 0.5, right - 0.5]) p.rect(x, top, 1, GROUND - top, INK.denimDark, 3)
+    p.rect(left - 0.5, top - 0.8, width + 1, 1, INK.silver, 3)
+    if (level >= 6) {
+      p.oval(52, surface - 1, 1.8, 1, INK.gold, 3)
+      p.oval(53.3, surface - 2.4, 0.9, 0.9, INK.gold, 2)
+    }
+    if (!isHere) {
+      walkIn(() => {
+        p.shapes(clawdShapes('pool', step).slice(0, 7))
+        if (walked < 1) p.oval(30, 18, 2.4, 2.4, INK.leaf, 3)
+      })
+    } else {
+      p.shapes(clawdShapes('pool', 0), 3)
+      p.line(0, GROUND - 0.5, 4.5, 23, 2, INK.leaf)
+      p.line(4.5, 23, 6, 18, 2, INK.leaf)
+    }
+    if (isOn && water !== null) {
+      const land = Math.min(surface, GROUND - 1)
+      if (water.drop !== null) p.rect(35, 17 + water.drop * 2.5, 2, 2, wet, 3)
+      else if (water.isSplash && water.jet === 0) p.rect(38, land - 1, 5, 1.4, wet, 2)
+      if (water.jet > 0) {
+        // Der Bogen in Stücken, die mit dem Takt wandern; je stärker, desto höher und weiter.
+        const end = left + (strength === 3 ? 9 : 4)
+        const peak = water.jet > 2 ? 8 : 12
+        const mx = (NOZZLE.x + end) / 2
+        for (let i = 0; i <= 12; i += 1) {
+          if ((i + tick) % 4 === 0) continue
+          const t = i / 12
+          const x = (1 - t) ** 2 * NOZZLE.x + 2 * (1 - t) * t * mx + t * t * end
+          const y = (1 - t) ** 2 * NOZZLE.y + 2 * (1 - t) * t * peak + t * t * land
+          p.rect(x - 1, y - 1, 2, 2, wet, 3)
+        }
+      }
+    }
+  } else if (role === 'bath') {
+    // Wanne auf goldenen Füßen, rechts der Hahn; Clawd sitzt darin, der Schaum türmt sich.
+    p.rect(33.6, 11, 1.6, TUB.rim - 11, INK.concrete, 3)
+    p.rect(30.6, 11, 4.6, 1.4, INK.concreteTop, 3)
+    p.rect(30.6, 12.4, 1.2, 1.4, INK.concreteTop, 3)
+    if (isTapOpen(arrival)) p.line(34.4, 11, 36.6, 8.8, 1.1, INK.red)
+    else p.line(34.4, 11, 37.4, 11, 1.1, INK.red)
+    const tub = () => {
+      if (level >= 8) {
+        p.oval(TUB.right + 4, GROUND, 4 + (level - 8) * 3, 0.9, withAlpha(wet, 0.45), 3)
+        p.line(TUB.right, TUB.rim, TUB.right + 0.3, GROUND, 0.9, wet)
+      }
+      p.rect(TUB.left, TUB.rim, TUB.right - TUB.left, 5.5, white)
+      p.rect(TUB.left + 2, 25, TUB.right - TUB.left - 4, 1.4, white, 3)
+      p.rect(TUB.left - 0.5, TUB.rim - 0.6, TUB.right - TUB.left + 1, 1, isLight ? INK.concrete : TOWEL, 3)
+      p.rect(4, 26.4, 2, 1.1, INK.gold, 2)
+      p.rect(TUB.right - 6, 26.4, 2, 1.1, INK.gold, 2)
+      for (const [x, dy, r] of FOAM_AT.slice(0, Math.min(10, level))) p.oval(x, TUB.rim - 0.4 + dy, r, r, isLight ? INK.flourDark : '#FFFFFF')
+    }
+    if (!isHere) {
+      tub()
+      walkIn(() => {
+        p.shapes(clawdShapes('bath', step))
+        if (walked < 1) p.shapes([[5, 11.5, 6, 1.2, TOWEL], [5, 12.7, 2, 6, TOWEL]], 3)
+      })
+    } else {
+      p.within(moved(1, 2), () => p.shapes(clawdShapes('bath', 0, false, true)))
+      tub()
+      fall(BATH_SPOUT.x, BATH_SPOUT.y, TUB.rim)
+    }
+  } else {
+    // See: Ufer, Wasser, das mit den Tokens schrumpft, Schilf, ab 8 ein Fisch; der Strohhalm.
+    const share = 1 - Math.min(10, level) / 10
+    p.oval(46.5, GROUND - 0.9, 14, 3.1, withAlpha(INK.soil, 0.8))
+    if (share > 0) p.oval(40 + 6.5 * share, GROUND - 0.9, Math.max(1, 13.5 * share), 0.8 + 2.1 * share, withAlpha(wet, 0.75), 3)
+    p.rect(57, GROUND - 5, 1, 4, INK.leaf, 3)
+    if (level >= 8) p.oval(52, isOn && tick % 2 === 1 ? GROUND - 3.6 : GROUND - 1.8, 2, 0.9, INK.fish, 3)
+    if (arrival >= 0) {
+      // Das Ruderboot fährt heran und wendet nach links wieder weg.
+      const shift = arrivalShift(arrival)
+      const boat: Matrix = shift > 0 ? times(moved(VEHICLE_WIDTH - shift * 44, 0), [-1, 0, 0, 1, 0, 0]) : moved(shift * 40, 0)
+      p.within(boat, () => {
+        p.rect(-4, 24.5, 38, 3.5, withAlpha(wet, 0.55), 3)
+        p.rect(2, 19, 28, 3, INK.wood)
+        p.rect(4, 22, 23, 3, INK.wood)
+        p.rect(1, 18, 29, 1.2, INK.crust, 3)
+        const oar = rollOf(arrival) % 2 === 0 ? { x: 1, y: 27 } : { x: -1, y: 20 }
+        p.line(10.5, 17.5, oar.x, oar.y, 1, INK.crust)
+      })
+      if (arrival > ARRIVE.in) {
+        const hop = arrival === ARRIVE.in + 1 ? -3 : arrival === ARRIVE.in + 2 ? -1 : 0
+        p.within(moved(0, hop), () => p.shapes(clawdShapes('lake', 0), 3))
+      }
+    } else {
+      p.shapes(clawdShapes('lake', 0), 3)
+      // Der Strohhalm, rot-weiß; die Streifen wandern beim Saugen zu Clawd.
+      const flow = isOn ? tick * (strength >= 2 ? 2 : 1) : 0
+      const path: [number, number][] = [[24.5, 15.5], [28.5, 9.5], [31, 8], [37.8, 8], [40, 10], [STRAW_TIP.x, STRAW_TIP.y]]
+      let walkedAlong = 0
+      for (let i = 1; i < path.length; i += 1) {
+        const [x1, y1] = path[i - 1] ?? [0, 0]
+        const [x2, y2] = path[i] ?? [0, 0]
+        const length = Math.hypot(x2 - x1, y2 - y1)
+        for (let d = 0; d < length; d += 2) {
+          const t = d / length
+          const color = (Math.floor((walkedAlong + d) / 2) + flow) % 2 === 0 ? INK.red : INK.flour
+          p.rect(x1 + t * (x2 - x1) - 1, y1 + t * (y2 - y1) - 1, 2, 2, color, 3)
+        }
+        walkedAlong += length
+      }
+    }
+  }
+
+  return p.grid
 }
 
 export function sceneAlt(scene: Scene): string {

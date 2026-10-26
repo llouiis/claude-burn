@@ -364,6 +364,9 @@ function statsEngine(on: On, cache: unknown, stored?: Record<string, unknown>) {
 
 const has = async (ui: { find: (q: { type: string; text: RegExp }) => Promise<unknown> }, re: RegExp) =>
   (await ui.find({ type: 'Text', text: re })) !== undefined
+// In VS Code stehen Spalten als Boxen fester Breite nebeneinander: die Zeile ist eine Box.
+const hasRow = async (ui: { find: (q: { type: string; text: RegExp }) => Promise<unknown> }, re: RegExp) =>
+  (await ui.find({ type: 'Box', text: re })) !== undefined
 
 test('Usage shows cost, limits and context like /usage, on every surface', async ($, on) => {
   statsEngine(on, CACHE)
@@ -374,8 +377,15 @@ test('Usage shows cost, limits and context like /usage, on every surface', async
     const ui = await $.ui.mount({ ...PANE, surface })
 
     expect(await has(ui, /^Settings\s$/)).toBe(true)
-    expect(await has(ui, /^Total\scost:\s+\$1\.2346$/)).toBe(true)
-    expect(await has(ui, /^Total\sduration\s\(wall\):\s+3m\s3s$/)).toBe(true)
+    if (surface === 'vscode') {
+      // Die Beschriftung in einer Box fester Breite, der Wert daneben.
+      expect(await hasRow(ui, /^Total\scost:\$1\.2346$/)).toBe(true)
+      expect(await hasRow(ui, /^Total\sduration\s\(wall\):3m\s3s$/)).toBe(true)
+      expect(await ui.find({ type: 'Svg' })).toBeUndefined()
+    } else {
+      expect(await has(ui, /^Total\scost:\s+\$1\.2346$/)).toBe(true)
+      expect(await has(ui, /^Total\sduration\s\(wall\):\s+3m\s3s$/)).toBe(true)
+    }
     expect(await has(ui, /^Current\ssession$/)).toBe(true)
     expect(await has(ui, /34%\sused$/)).toBe(true)
     expect(await has(ui, /^Resets\s6:40pm\s\(Europe\/Berlin\)$/)).toBe(true)
@@ -404,8 +414,14 @@ test('Stats › Overview reads like /stats, on every surface', async ($, on) => 
     expect(await has(ui, /^Your input and output are ~67x the tokens in To Kill a Mockingbird$/)).toBe(true)
     expect(await has(ui, /^Most\sactive\shour:\s8pm–9pm$/)).toBe(true)
     expect(await has(ui, /^All\stime$/)).toBe(true)
-    // VS Code zeichnet keine Svg (siehe register.tsx): dort die Heatmap als Text.
-    if (surface === 'terminal' || surface === 'vscode') {
+    // VS Code zeichnet keine Svg und kein mono (siehe register.tsx): dort die Heatmap aus Box.
+    if (surface === 'vscode') {
+      expect(await has(ui, /^Mon$/)).toBe(true)
+      expect(await has(ui, /^Oct$/)).toBe(true)
+      expect(await hasRow(ui, /^Less\s\sMore$/)).toBe(true)
+      expect(await ui.find({ type: 'Svg' })).toBeUndefined()
+      expect(JSON.stringify(await ui.drawn())).toContain('"backgroundColor":"#D97757FF"')
+    } else if (surface === 'terminal') {
       expect(await has(ui, /^Mon\s/)).toBe(true)
       expect(await has(ui, /Oct/)).toBe(true)
       expect(await has(ui, /^\s+Less\s░\s▒\s▓\s█\sMore$/)).toBe(true)

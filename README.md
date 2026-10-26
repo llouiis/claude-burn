@@ -52,7 +52,7 @@ In der Desktop-App und in VS Code steht alles in einer ruhigen Zeile, der Text m
 
 In der Desktop-App ist Clawd anderthalbmal so groß wie seine Pixelvorlage (90 × 41 px, auf Retina gestochen scharf). Wird das Fenster schmaler (unter rund 97 Zeichen), steht er in Originalgröße (60 × 27 px); unter rund 84 Zeichen rückt der Zähler mit ihm unter die Limits, unter rund 42 tritt er beiseite. Ein breiteres Fenster zeigt ihn nie kleiner als ein schmaleres.
 
-VS Code zeichnet keine Svg-Bilder in der Leiste (es zeigt nur deren Beschreibung). Dort ist der Balken deshalb ein schlichter Streifen, und Clawd steht als farbige Zeichen da wie im Terminal: ab rund 105 Zeichen die ganze Szene in drei Zeilen, schmaler nur er selbst in einer Zeile, unter rund 82 Zeichen mit dem Zähler unter den Limits, unter rund 42 gar nicht. Heatmap und Diagramm in `/tokenstats` erscheinen dort ebenfalls als Text.
+VS Code zeichnet keine Svg-Bilder in der Leiste (es zeigt nur deren Beschreibung) und Text nur in seiner Chat-Schrift. Dort ist der Balken deshalb ein flacher Streifen, und Clawd steht mit seiner Szene aus farbigen Kästchen da, so groß wie in der Desktop-App: ab rund 98 Zeichen in voller Größe, schmaler kleiner, unter rund 84 Zeichen mit dem Zähler unter den Limits, unter rund 42 gar nicht. Heatmap, Diagramm und Tabellen in `/tokenstats` sind dort ebenfalls aus Kästchen und festen Spalten gebaut.
 
 Seit 0.16.0 merkt sich der Mod die Tokens jeder Unterhaltung: Setzt du eine Sitzung fort, passen Preis und Tokens zusammen. Seit 0.17.1 zählen auch die Tokens eines `/compact` mit, dessen Preis schon immer drin war.
 

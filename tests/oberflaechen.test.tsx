@@ -85,13 +85,15 @@ function engine(on: On, resumed?: { usd: number; stored?: Record<string, unknown
   }))
   on('session.measure', (_, e) => ({ changed: e.changed }))
   mock.store(on, resumed?.stored)
-  mock.clock(on, { now: NOW })
+  const clock = mock.clock(on, { now: NOW })
   mock.env(on, { HOME: '/home/louis' })
   on('fs.read', (_, e) => {
     if (e.path !== '/home/louis/.claude/stats-cache.json') throw new Error('ENOENT')
 
     return { value: JSON.stringify(CACHE) }
   })
+
+  return clock
 }
 
 type Node = { type?: string; props?: Record<string, unknown>; children?: unknown[] } | string | null | undefined
@@ -103,7 +105,8 @@ type Drawn = {
 
 // So breit, wie die Apps es zeichnen, in Zeichen der Code-Schrift: Text in footnote ist
 // proportional, mit den Ziffern aber kaum schmaler (0,9 Zellen je Zeichen), `mono` eine Zelle je
-// Zeichen, ein Svg hat Pixel (eine Zelle 7 px), eine Box mit Breite so viele Zellen.
+// Zeichen, ein Svg hat Pixel (eine Zelle 7 px). Eine Box mit Breite misst in ch der Chat-Schrift
+// von VS Code (rund 8,2 px), also gut 1,17 Zellen je ch.
 function cells(node: Node, perChar = 0.9): number {
   if (node === null || node === undefined || typeof node === 'boolean') return 0
   if (typeof node === 'string' || typeof node === 'number') return String(node).length * perChar
@@ -111,7 +114,7 @@ function cells(node: Node, perChar = 0.9): number {
   const kids = (node.children ?? []) as Node[]
   const each = node.props?.mono === true ? 1 : perChar
   if (node.type === 'Svg') return Math.ceil(Number(node.props?.width ?? 0) / 7)
-  if (node.type === 'Box' && typeof node.props?.width === 'number') return node.props.width
+  if (node.type === 'Box' && typeof node.props?.width === 'number') return (node.props.width * 8.2) / 7
   if (node.type === 'Box' && node.props?.flexDirection === 'column') return Math.max(0, ...kids.map(kid => cells(kid, each)))
 
   return kids.reduce((sum: number, one) => sum + cells(one, each), 0)
@@ -129,15 +132,21 @@ const clawdSvg = async (ui: Drawn) =>
     [APP_SCENE, APP_SCENE_FLAT].some(size => svg.props.width === size.width && svg.props.height === size.height),
   )
 const clawd = async (ui: Drawn) => (await clawdSvg(ui)) ?? (await ui.find({ key: 'hahn' }))
-// In VS Code: 1,5 der Block aus drei Zeilen, 1 Clawds eine Zeile, 0 ohne ihn.
+// In VS Code: 1,5 die großen Box-Pixel, 1 die kleinen, 0 ohne ihn.
+type Tree = { type?: string; props?: Record<string, unknown>; children?: Tree[] }
 const textScale = async (ui: Drawn) => {
-  const box = (await ui.find({ key: 'hahn' })) as { props?: Record<string, unknown> } | undefined
+  const box = (await ui.find({ key: 'hahn' })) as Tree | undefined
   if (box === undefined) return 0
 
-  return box.props?.flexDirection === 'column' ? 1.5 : 1
+  return box.children?.[0]?.props?.height === 0.165 ? 1.5 : 1
 }
+// Alle Knoten eines Baums, die Wurzel zuerst.
+const nodesOf = (tree: Tree): Tree[] => [tree, ...(tree.children ?? []).filter(k => typeof k === 'object' && k !== null).flatMap(nodesOf)]
 
 const WIDTHS = [45, 55, 70, 100]
+// In VS Code: ab hier eine Zeile, ab hier die großen Box-Pixel.
+const ROW_FROM = 84
+const LARGE_FROM = 98
 
 test('in the desktop app the bar fits every width, one row from 84 columns; wider never shows Clawd smaller', async ($, on) => {
   engine(on)
@@ -171,40 +180,52 @@ test('in the desktop app the bar fits every width, one row from 84 columns; wide
   }
 })
 
-test('in VS Code the bar draws no Svg: the bar is a Box, Clawd is text, and wider never shows him smaller', async ($, on) => {
-  engine(on)
+test('in VS Code the bar draws no Svg: the bar is a Box, Clawd is Box pixels, and wider never shows him smaller', async ($, on) => {
+  const clock = engine(on)
   await $.session.start({ cwd: '/', surface: 'vscode', isInteractive: true })
   await $.session.measure(measure)
+  // Die Rolle fest, sonst lost die Sitzung eine aus und die Szene ändert sich von Lauf zu Lauf.
+  await $.command.run({ command: 'clawd', args: 'pool' })
 
   let last = { scale: 0, isRow: false }
   for (let bodyColumns = 40; bodyColumns <= 140; bodyColumns += 1) {
     const ui = await $.ui.mount({ ...BAND, props: { ...BAND.props, bodyColumns }, surface: 'vscode' })
-    const tree = JSON.stringify(await ui.drawn())
-    expect({ bodyColumns, svgs: (await ui.findAll({ type: 'Svg' })).length }).toEqual({ bodyColumns, svgs: 0 })
-    expect({ bodyColumns, bar: tree.includes('"backgroundColor":"suggestion"') }).toEqual({ bodyColumns, bar: true })
+    const drawn = (await ui.drawn()) as Tree
+    const all = nodesOf(drawn)
+    expect({ bodyColumns, svgs: all.filter(n => n.type === 'Svg').length }).toEqual({ bodyColumns, svgs: 0 })
+    expect({ bodyColumns, bar: all.some(n => n.props?.backgroundColor === 'suggestion' && n.props.height === 0.3) }).toEqual({
+      bodyColumns,
+      bar: true,
+    })
+    // Keine Zeilen-Box darf umbrechen; VS Code täte es sonst von sich aus.
+    const wrapping = all.filter(
+      n => n.type === 'Box' && (n.props?.flexDirection ?? 'row') === 'row' && (n.children?.length ?? 0) > 1 && n.props?.flexWrap !== 'nowrap',
+    )
+    expect({ bodyColumns, wrapping: wrapping.length }).toEqual({ bodyColumns, wrapping: 0 })
+    expect({ bodyColumns, small: all.length <= 300 }).toEqual({ bodyColumns, small: true })
     const scale = await textScale(ui)
-    const isRow = !tree.includes('"flexDirection":"column"') || scale === 1.5
-    // Ab 42 Spalten gestapelt Clawds eine Zeile, ab 82 in einer Zeile, ab 105 der Block aus drei Zeilen.
+    const isRow = drawn.props?.flexDirection !== 'column'
+    // Ab 42 Spalten gestapelt mit kleinen Pixeln, ab ROW_FROM in einer Zeile, ab LARGE_FROM große.
     expect({ bodyColumns, scale, isRow }).toEqual({
       bodyColumns,
-      scale: bodyColumns >= 105 ? 1.5 : bodyColumns >= 42 ? 1 : 0,
-      isRow: bodyColumns >= 82,
+      scale: bodyColumns >= LARGE_FROM ? 1.5 : bodyColumns >= 42 ? 1 : 0,
+      isRow: bodyColumns >= ROW_FROM,
     })
     expect({ bodyColumns, grows: scale >= last.scale && (isRow || !last.isRow) }).toEqual({ bodyColumns, grows: true })
-    expect({ bodyColumns, cells: fits(cells((await ui.drawn()) as Node), bodyColumns) }).toEqual({ bodyColumns, cells: true })
+    expect({ bodyColumns, cells: fits(cells(drawn as Node), bodyColumns) }).toEqual({ bodyColumns, cells: true })
     last = { scale, isRow }
     await ui.unmount()
   }
 
-  // Der Block: drei gleich breite Zeilen in Code-Schrift, farbig wie im Terminal.
+  // Clawd, angekommen: 14 Pixelzeilen aus farbigen Boxen, kein Text, schon gar kein mono.
   const wide = await $.ui.mount({ ...BAND, props: { ...BAND.props, bodyColumns: 130 }, surface: 'vscode' })
-  const block = (await wide.find({ key: 'hahn' })) as { children: { props: Record<string, unknown> }[] }
-  expect(block.children.length).toBe(3)
-  expect(block.children.every(row => row.props.mono === true)).toBe(true)
-  const widths = block.children.map(row => textOf(row as Node).length)
-  expect(new Set(widths).size).toBe(1)
-  // Frisch gestartet läuft Clawd gerade erst an; Hahn und Becken stehen schon farbig da.
-  expect(JSON.stringify(block)).toMatch(/"color":"(claude|inactive|error)"/)
+  await clock.advance(3_000)
+  const block = (await wide.find({ key: 'hahn' })) as Tree
+  expect(block.children?.length).toBe(14)
+  const inside = nodesOf(block)
+  expect(inside.every(n => n.type === 'Box')).toBe(true)
+  expect(inside.some(n => n.props?.backgroundColor === '#D97757')).toBe(true)
+  expect(nodesOf((await wide.drawn()) as Tree).some(n => n.type === 'Text' && n.props?.mono === true)).toBe(false)
   await wide.unmount()
 })
 
@@ -373,18 +394,23 @@ test('the stats charts in the apps stay inside a narrow pane', async ($, on) => 
   await $.session.start({ cwd: '/', surface: 'vscode', isInteractive: true })
   await $.session.measure(measure)
 
-  // VS Code zeichnet keine Svg: Heatmap und Diagramm als Text, Zeile für Zeile in der Breite.
+  // VS Code zeichnet keine Svg und kein mono: Heatmap und Diagramm aus Box, jede Zeile so breit,
+  // wie ch der Chat-Schrift (rund 8,2 px) in die Breite passen.
   for (const bodyColumns of [40, 55, 80]) {
     const ui = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns }, surface: 'vscode' })
     await ui.press({ key: 'tab-stats' })
     for (const tab of ['tab-1', 'tab-2']) {
       await ui.press({ key: tab })
-      expect({ bodyColumns, tab, svgs: (await ui.findAll({ type: 'Svg' })).length }).toEqual({ bodyColumns, tab, svgs: 0 })
-      const rows = ((await ui.findAll({ type: 'Text' })) as Node[]).filter(
-        row => typeof row === 'object' && row !== null && row.props?.mono === true,
+      const all = nodesOf((await ui.drawn()) as Tree)
+      expect({ bodyColumns, tab, svgs: all.filter(n => n.type === 'Svg').length }).toEqual({ bodyColumns, tab, svgs: 0 })
+      expect({ bodyColumns, tab, mono: all.some(n => n.props?.mono === true) }).toEqual({ bodyColumns, tab, mono: false })
+      expect(all.filter(n => n.type === 'Box' && n.props?.backgroundColor !== undefined).length).toBeGreaterThan(0)
+      const widest = Math.max(
+        ...all
+          .filter(n => n.type === 'Box' && n.props?.flexWrap === 'nowrap')
+          .map(n => (n.children ?? []).reduce((sum, kid) => sum + (typeof kid.props?.width === 'number' ? kid.props.width : 0), 0)),
       )
-      expect(rows.length).toBeGreaterThan(0)
-      expect({ bodyColumns, tab, fits: rows.every(row => textOf(row).length <= bodyColumns) }).toEqual({ bodyColumns, tab, fits: true })
+      expect({ bodyColumns, tab, fits: widest <= Math.floor((bodyColumns * 7) / 8.2) }).toEqual({ bodyColumns, tab, fits: true })
     }
     await ui.unmount()
   }

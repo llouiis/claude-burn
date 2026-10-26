@@ -1,6 +1,6 @@
 {
   "name": "burn",
-  "version": "0.20.0",
+  "version": "0.21.0",
   "description": "Dezente Leiste über dem Eingabefeld mit den Nutzungslimits wie /usage, per Klick durchschaltbar; daneben verschwendet Clawd in einer ausgelosten Rolle Wasser, mit Literanzeige (Hahn, Dusche, Pool, Wanne, See)",
   "types": "./types/index.d.ts",
   "author": {

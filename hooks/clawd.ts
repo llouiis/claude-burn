@@ -313,11 +313,12 @@ export const SCENE_SVG = { width: 80, height: 36 }
 // In der Leiste der Apps steht die Szene 2-fach (120 × 54): auf Retina vier Gerätepixel je
 // Szenenpixel, also scharf, und groß genug, dass man Clawd gut erkennt. Wird es eng, steht er
 // 1,5-fach (90 × 41; die halbe Zeile zu 41 bleibt unten frei, preserveAspectRatio oben bündig),
-// gestapelt immer 1,5-fach, damit die Leiste flach bleibt.
+// gestapelt 1,5-fach, damit die Leiste flach bleibt; im ganz schmalen Panel 1-fach (60 × 27).
 // Ein engerer Ausschnitt ginge nicht: Sonnenschirm, Dampf und Noten reichen bis an den Rand.
 export const appScene = (scale: number) => ({ width: SCENE_VIEW.width * scale, height: Math.ceil(SCENE_VIEW.height * scale) })
 export const APP_LARGE = 2
 export const APP_SMALL = 1.5
+export const APP_TINY = 1
 export const APP_SCENE = appScene(APP_LARGE)
 export const APP_SCENE_FLAT = appScene(APP_SMALL)
 // `isLight`: auf hellem Grund bekommen Weißes (Dampf, Becken) Kontur und Ton.

@@ -17,6 +17,7 @@ import {
   appScene,
   APP_LARGE,
   APP_SMALL,
+  APP_TINY,
   PIXEL_GRID,
   scenePixels,
   FLOWS,
@@ -122,8 +123,13 @@ const appText = (chars: number) => Math.ceil(chars * APP_TEXT_CELL)
 const APP_SLACK = 3
 // Ohne Svg (VS Code) steht die Szene aus Box-Pixeln (scenePixels): Breite in ch, Höhe in lh
 // der Chat-Schrift dort (13 px: rund 8,2 px je ch, 18,2 je lh). Groß je 4 × 4 px wie das
-// 2-fache Svg (120 × 54 px), klein je 3 × 3 px wie das 1,5-fache.
-const APP_PIXEL = { large: { width: 0.488, height: 0.22 }, small: { width: 0.37, height: 0.165 } }
+// 2-fache Svg (120 × 54 px), klein je 3 × 3 px wie das 1,5-fache, winzig je 2 × 2 px wie das 1-fache.
+const APP_PIXEL = {
+  large: { width: 0.488, height: 0.22 },
+  small: { width: 0.37, height: 0.165 },
+  tiny: { width: 0.245, height: 0.11 },
+}
+const pixelSize = (scale: number) => (scale > APP_SMALL ? APP_PIXEL.large : scale > APP_TINY ? APP_PIXEL.small : APP_PIXEL.tiny)
 const APP_CH_PX = 8.2
 const drip = atom({ plugin: 'burn', key: 'drip' } as const, 0)
 // -1 zugedreht, sonst die Stufe wie flowNow; Wasser zeigt die Szene nur, solange es läuft.
@@ -1889,7 +1895,7 @@ export const register: Register = on => {
     // VS Code: jede Pixelzeile eine Box, darin je Lauf gleicher Farbe eine Box (leer, wo nichts
     // ist). nowrap, sonst bräche VS Code eine Zeile um; so bleiben es rund 130 Knoten.
     const pixelPart = (scale: number) => {
-      const size = scale > APP_SMALL ? APP_PIXEL.large : APP_PIXEL.small
+      const size = pixelSize(scale)
       const across = (n: number) => Math.round(n * size.width * 1000) / 1000
 
       return (
@@ -2003,7 +2009,7 @@ export const register: Register = on => {
     ]
 
     // Die Apps, desktop und vscode gleich und nur nach der Breite, in einer Zeile:
-    // erst kürzen sich die Details, dann wird Clawd kleiner (1,5-fach 13 Zellen, 1-fach 9),
+    // erst kürzen sich die Details, dann wird Clawd kleiner (2-fach, 1,5-fach, im schmalen Panel 1-fach),
     // dann geht der Preis, erst dann die Liter. Die Liter bleiben also, solange es geht: das
     // Seitenpanel von VS Code ist selten breiter als 100 Zeichen. Passt nicht alles in die Zeile,
     // rückt der Zähler mit ihm unter die Limits; erst wenn selbst das nicht passt, tritt er
@@ -2025,6 +2031,10 @@ export const register: Register = on => {
       { scale: APP_SMALL, withMoney: false, withLiters: true },
       { scale: APP_SMALL, withMoney: true, withLiters: false },
       { scale: APP_SMALL, withMoney: false, withLiters: false },
+      { scale: APP_TINY, withMoney: true, withLiters: true },
+      { scale: APP_TINY, withMoney: false, withLiters: true },
+      { scale: APP_TINY, withMoney: true, withLiters: false },
+      { scale: APP_TINY, withMoney: false, withLiters: false },
       { scale: 0, withMoney: true, withLiters: false },
       { scale: 0, withMoney: false, withLiters: false },
     ] as const
@@ -2035,7 +2045,7 @@ export const register: Register = on => {
       (step.scale === 0
         ? 0
         : isTextApp
-          ? appCells(PIXEL_GRID.cols * (step.scale > APP_SMALL ? APP_PIXEL.large : APP_PIXEL.small).width * APP_CH_PX)
+          ? appCells(PIXEL_GRID.cols * pixelSize(step.scale).width * APP_CH_PX)
           : appCells(appScene(step.scale).width))
     const appPlan = (left: (detail: string | undefined) => number, details: string[]): AppPlan => {
       const options = [...details, undefined]
@@ -2044,7 +2054,8 @@ export const register: Register = on => {
 
         return at < 0 ? null : { detail: options[at], ...step, hasTap: step.scale > 0, isStacked: false }
       }
-      // Gestapelt steht Clawd klein, damit die Leiste flach bleibt.
+      // Gestapelt steht Clawd klein, damit die Leiste flach bleibt; im ganz schmalen Panel
+      // winzig, statt zu gehen (VS Code ist oft so schmal).
       const stacked = (step: AppStep): AppPlan | null =>
         appLive(step) <= appRoom
           ? { detail: options.find(d => left(d) <= appRoom), ...step, hasTap: step.scale > 0, isStacked: true }
@@ -2053,10 +2064,11 @@ export const register: Register = on => {
       const withTap = APP_STEPS.filter(step => step.scale > 0)
       const without = APP_STEPS.filter(step => step.scale === 0)
       const isWhole = (step: AppStep) => step.withLiters && step.withMoney
+      // Winzig steht er nur gestapelt: in einer Zeile wäre er neben dem Text zu klein.
       const plans = [
-        ...withTap.filter(isWhole).map(inRow),
-        ...withTap.filter(step => step.scale === APP_SMALL).map(stacked),
-        ...withTap.filter(step => !isWhole(step)).map(inRow),
+        ...withTap.filter(step => isWhole(step) && step.scale > APP_TINY).map(inRow),
+        ...withTap.filter(step => step.scale < APP_LARGE).map(stacked),
+        ...withTap.filter(step => !isWhole(step) && step.scale > APP_TINY).map(inRow),
         ...without.map(inRow),
         ...without.map(stacked),
       ]

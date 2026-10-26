@@ -132,13 +132,15 @@ const clawdSvg = async (ui: Drawn) =>
     [APP_SCENE, APP_SCENE_FLAT].some(size => svg.props.width === size.width && svg.props.height === size.height),
   )
 const clawd = async (ui: Drawn) => (await clawdSvg(ui)) ?? (await ui.find({ key: 'hahn' }))
-// In VS Code: 2 die großen Box-Pixel, 1,5 die kleinen, 0 ohne ihn.
+// In VS Code: 2 die großen Box-Pixel, 1,5 die kleinen, 1 die winzigen, 0 ohne ihn.
 type Tree = { type?: string; props?: Record<string, unknown>; children?: Tree[] }
 const textScale = async (ui: Drawn) => {
   const box = (await ui.find({ key: 'hahn' })) as Tree | undefined
   if (box === undefined) return 0
 
-  return box.children?.[0]?.props?.height === 0.22 ? 2 : 1.5
+  const height = box.children?.[0]?.props?.height
+
+  return height === 0.22 ? 2 : height === 0.165 ? 1.5 : 1
 }
 // Alle Knoten eines Baums, die Wurzel zuerst.
 const nodesOf = (tree: Tree): Tree[] => [tree, ...(tree.children ?? []).filter(k => typeof k === 'object' && k !== null).flatMap(nodesOf)]
@@ -205,10 +207,11 @@ test('in VS Code the bar draws no Svg: the bar is a Box, Clawd is Box pixels, an
     expect({ bodyColumns, small: all.length <= 300 }).toEqual({ bodyColumns, small: true })
     const scale = await textScale(ui)
     const isRow = drawn.props?.flexDirection !== 'column'
-    // Ab 52 Spalten gestapelt mit kleinen Pixeln, ab ROW_FROM in einer Zeile, ab LARGE_FROM große.
+    // Ab 47 Spalten gestapelt mit winzigen Pixeln, ab 52 mit kleinen, ab ROW_FROM in einer Zeile,
+    // ab LARGE_FROM große.
     expect({ bodyColumns, scale, isRow }).toEqual({
       bodyColumns,
-      scale: bodyColumns >= LARGE_FROM ? 2 : bodyColumns >= 52 ? 1.5 : 0,
+      scale: bodyColumns >= LARGE_FROM ? 2 : bodyColumns >= 52 ? 1.5 : bodyColumns >= 47 ? 1 : 0,
       isRow: bodyColumns >= ROW_FROM,
     })
     expect({ bodyColumns, grows: scale >= last.scale && (isRow || !last.isRow) }).toEqual({ bodyColumns, grows: true })

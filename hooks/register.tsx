@@ -151,6 +151,8 @@ const APP_CH_PX = 8.2
 const drip = atom({ plugin: 'burn', key: 'drip' } as const, 0)
 // -1 zugedreht, sonst die Stufe wie flowNow; Wasser zeigt die Szene nur, solange es läuft.
 const flow = atom({ plugin: 'burn', key: 'flow' } as const, -1)
+// Milliliter pro Sekunde, auf 0,5 gerundet, damit nicht jede kleine Schwankung neu zeichnet.
+const mlps = atom({ plugin: 'burn', key: 'mlps' } as const, 0)
 let dripper: { cancel: () => void } | undefined
 // Die Rolle, einmal pro Sitzung ausgelost; /clawd wechselt sie von Hand.
 const role = atom({ plugin: 'burn', key: 'role' } as const, 0)
@@ -400,6 +402,7 @@ async function closeTap($: EngineInterface) {
   flowNow = -1
   await update($, flow, () => -1)
   await update($, drip, () => 0)
+  await update($, mlps, () => 0)
 }
 
 // Startet die Anfahrt von vorn; der Takt zählt hoch und hört am Ende von selbst auf.
@@ -462,7 +465,10 @@ async function setFlow($: EngineInterface, next: number, at: number) {
 async function measureFlow($: EngineInterface) {
   if (dripper === undefined) return
   const at = await $.clock.now()
-  const next = flowFor(rateAt(at), flowNow, at - flowSince)
+  const rate = rateAt(at)
+  const ml = Math.round(rate * ML_PER_TOKEN * 2) / 2
+  if (ml !== (await read($, mlps))) await update($, mlps, () => ml)
+  const next = flowFor(rate, flowNow, at - flowSince)
   if (next !== flowNow) await setFlow($, next, at)
 }
 
@@ -1901,6 +1907,7 @@ export const register: Register = on => {
       level: isTap ? tapLevel(sessionOut * ML_PER_TOKEN) : sizeLevel(Math.max(0, totals.session + inFlight - behindBy)),
       liters,
       arrival: arrivalAt,
+      mlPerSecond: await read($, mlps),
     }
     const tapColors = !isTerminal && (await read($, isLight)) ? PALETTE.light : PALETTE.dark
     const isTall = isTerminal && e.props.maxRows >= 3

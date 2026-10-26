@@ -58,6 +58,8 @@ declare module 'claude-code' {
       lag: number
       drip: number
       flow: number
+      // Milliliter pro Sekunde, solange gestreamt wird (der Strahl am Hahn)
+      mlps: number
       role: number
       arrival: number
       idle: number

@@ -826,12 +826,12 @@ test('every job draws in the terminal and in the apps, and tempo and size change
       // Jede Stärke im zweiten Bild ihrer Folge, mitten im Fall oder Strahl.
       ...[0, 1, 2, 3].map(strength => draw({ ...rest, water: FLOWS[strength]?.[1] ?? null, strength, tick: 1 })),
     ]
-    // Am Hahn hat die Größe nur vier Stufen: trocken, Stehen, Hocker, Liegestuhl, Sonnenschirm.
+    // Am Hahn wächst die Pfütze: trocken, dann breiter ab 1, 5 und 20 L; im Terminal ist sie nur da.
     const levels = role === 'tap' ? [0, 2, 3, 4] : [0, 3, 6, 10]
     const sizes = (draw: (scene: Scene) => string) => levels.map(level => draw({ ...rest, level }))
     for (const draw of [text, (scene: Scene) => sceneSvg(scene, colors)]) {
       expect({ role, tempo: new Set(pictures(draw)).size }).toEqual({ role, tempo: 5 })
-      expect({ role, size: new Set(sizes(draw)).size }).toEqual({ role, size: 4 })
+      expect({ role, size: new Set(sizes(draw)).size }).toEqual({ role, size: role === 'tap' && draw === text ? 2 : 4 })
     }
     // Jede Zeile bleibt so breit wie Clawds Platz, die Szene so breit wie der Zähler.
     for (const scene of [rest, { ...rest, level: 10, water: FLOWS[3]?.[0] ?? null, strength: 3 }, { ...rest, arrival: 4 }, { ...rest, arrival: 12 }]) {
@@ -863,22 +863,48 @@ test('in the light theme the white things get a contour; the dark theme stays as
   expect(tap).toMatch(/<ellipse cx="44" cy="[\d.]+" rx="4.5" ry="1" fill="#5769F7"/)
 })
 
-test('the steam leaves Clawds face free, the deck chair is smooth, arrivals fade in at the edge', () => {
+test('while Claude works Clawd types: the arms take turns and the screen glows', () => {
   const colors = { suggestion: '#B1B9F9', gray: '#B0AEA5' }
-  // Gesicht unter der Haube: x 8 bis 24, y 12 bis 19; kein Dampfkreis reicht hinein.
+  for (const role of ROLES) {
+    const working = (tick: number) => sceneSvg({ role, water: FLOWS[2]?.[tick] ?? null, strength: 2, tick, level: 1, arrival: -1 }, colors)
+    expect(working(0)).toContain('<rect x="2" y="11" width="4" height="4"')
+    expect(working(1)).toContain('<rect x="30" y="11" width="4" height="4"')
+    expect(working(0)).toContain('<rect x="10" y="15.6" width="16" height="0.8" fill="#9FD8FF"')
+    // Ruht er, hängen beide Ärmchen und das Display ist dunkel.
+    const resting = sceneSvg({ role, water: null, strength: 0, tick: 0, level: 1, arrival: -1, idle: 0 }, colors)
+    expect(resting).not.toContain('y="11" width="4"')
+    expect(resting).not.toContain('#9FD8FF')
+  }
+})
+
+test('the jet at the tap is as thick as the liters per second', () => {
+  const colors = { suggestion: '#B1B9F9', gray: '#B0AEA5' }
+  const width = (mlPerSecond: number) => {
+    const svg = sceneSvg({ role: 'tap', water: FLOWS[2]?.[0] ?? null, strength: 2, tick: 0, level: 1, arrival: -1, mlPerSecond }, colors)
+    return Number(/<path d="M44 13 L44 [\d.]+" [^>]*stroke-width="([\d.]+)"/.exec(svg)?.[1])
+  }
+  expect(width(5)).toBeLessThan(width(15))
+  expect(width(15)).toBeLessThan(width(30))
+  expect(width(1_000)).toBe(3.5)
+})
+
+test('the steam leaves Clawds face free, arrivals fade in at the edge', () => {
+  const colors = { suggestion: '#B1B9F9', gray: '#B0AEA5' }
+  // Gesicht: x 8 bis 28, y 8 bis 16; kein Dampfkreis reicht hinein.
   for (const tick of [0, 1]) {
     const shower = sceneSvg({ role: 'shower', water: FLOWS[3]?.[0] ?? null, strength: 3, tick, level: 10, arrival: -1 }, colors)
     const puffs = [...shower.matchAll(/<circle cx="([\d.]+)" cy="([\d.]+)" r="([\d.]+)" fill="#FFFFFF"/g)].map(m => m.slice(1).map(Number))
     expect(puffs.length).toBe(10)
     for (const [x = 0, y = 0, r = 0] of puffs) {
-      const dx = Math.max(8 - x, 0, x - 24)
-      const dy = Math.max(12 - y, 0, y - 19)
+      const dx = Math.max(8 - x, 0, x - 28)
+      const dy = Math.max(8 - y, 0, y - 16)
       expect({ x, y, free: dx * dx + dy * dy >= r * r }).toEqual({ x, y, free: true })
     }
   }
-  // Im Liegestuhl liegt er gedreht ohne crispEdges, sonst würden die Kanten treppig.
-  const chair = sceneSvg({ role: 'tap', water: null, strength: 0, tick: 0, level: 4, arrival: -1 }, colors)
-  expect(chair).toMatch(/rotate\(-24 16 22\)"><rect/)
+  // Er macht es sich nicht mehr bequem: auch bei vielen Litern steht er am Laptop.
+  const busy = sceneSvg({ role: 'tap', water: null, strength: 0, tick: 0, level: 4, arrival: -1 }, colors)
+  expect(busy).not.toContain('rotate(')
+  expect(busy).toContain('fill="#C9C7C0"')
   // Wer hereinkommt, blendet am linken Rand ein; angekommen gibt es keine Maske mehr.
   for (const role of ROLES) {
     expect(sceneSvg({ role, water: null, strength: 0, tick: 0, level: 0, arrival: 3 }, colors)).toContain('mask="url(#burn-einfahrt)"')
@@ -922,7 +948,7 @@ test('Clawd arrives at the start and again after half an hour without replies; t
   await ui.unmount()
 })
 
-test('both jobs arrive on foot: with the phone to the tap, with a towel to the shower', async ($, on) => {
+test('both jobs arrive on foot with the laptop, to the shower with a towel too', async ($, on) => {
   engine(on)
   const clock = mock.clock(on, { now: NOW })
 
@@ -948,7 +974,7 @@ test('both jobs arrive on foot: with the phone to the tap, with a towel to the s
   expect(await rowText(towel, 'clawd')).toMatch(/▐▛███▜▌▬/)
   await towel.unmount()
   const app = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  expect((await svgOf(app))?.props.alt).toBe('Clawd walking in with a towel')
+  expect((await svgOf(app))?.props.alt).toBe('Clawd walking in with his laptop and a towel')
   await app.unmount()
 })
 
@@ -1053,7 +1079,7 @@ test('while Clawd arrives the hidden water does not redraw the bar', async ($, o
   await ui.unmount()
 })
 
-test('at the tap Clawd scrolls the phone while the water runs onto the floor, and lounges more with every liter', async ($, on) => {
+test('at the tap Clawd works while the water runs onto the floor, and the puddle grows with every liter', async ($, on) => {
   engine(on)
   const clock = mock.clock(on, { now: NOW })
 
@@ -1072,10 +1098,10 @@ test('at the tap Clawd scrolls the phone while the water runs onto the floor, an
   await clock.advance(5_000)
   expect(await rowText(ui, 'beine')).toMatch(/^ ▘▘ ▝▝ ▁▁▁ +≈ 113 ml$/)
 
-  // Ab 1 L sitzt er auf dem Hocker.
+  // Auch ab 1 L steht er weiter da.
   await step($, 0, 0, 10_000)
   await clock.advance(5_000)
-  expect(await rowText(ui, 'beine')).toMatch(/^ ╤═══╤ ▁▁▁ +≈ 1,2 L$/)
+  expect(await rowText(ui, 'beine')).toMatch(/^ ▘▘ ▝▝ ▁▁▁ +≈ 1,2 L$/)
 
   // Viel Tempo: der Strahl schießt in den Abfluss, dort strudelt es.
   usages.push({ model: 'claude-opus-5-5', input_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1_000 })
@@ -1088,20 +1114,21 @@ test('at the tap Clawd scrolls the phone while the water runs onto the floor, an
   // Danach tropft nichts nach: der Hahn ist still.
   expect(await rowText(ui, 'clawd')).toMatch(/^▐▛███▜▌▮ +$/)
 
-  // Ab 20 L Liegestuhl unter dem Sonnenschirm, mit Drink.
+  // Ab 20 L: kein Liegestuhl, kein Sonnenschirm, er steht weiter da.
   await step($, 0, 0, 200_000)
   await clock.advance(5_000)
-  expect(await tapText(ui)).toBe('▗▄▆█▆▄▖┻┓')
-  expect(await rowText(ui, 'clawd')).toMatch(/^▐▛███▜▌▮   ▿/)
-  expect(await rowText(ui, 'beine')).toMatch(/^╲▚▚▚▚▚╱▁▁▁ +≈ 2\d,\d L$/)
+  expect(await tapText(ui)).toBe('       ┻┓')
+  expect(await rowText(ui, 'clawd')).toMatch(/^▐▛███▜▌▮ +$/)
+  expect(await rowText(ui, 'beine')).toMatch(/^ ▘▘ ▝▝ ▁▁▁ +≈ 2\d,\d L$/)
   await ui.unmount()
 
   const app = await $.ui.mount({ ...BAND, surface: 'desktop' })
   const svg = await svgOf(app)
-  expect(svg?.props.alt).toBe('Clawd on the phone in a deck chair under a parasol')
-  // Das Display leuchtet, der Hebel am Hahn ist rot; die Liter stehen neben dem Becken.
-  expect(String(svg?.props.source)).toContain('#9FD8FF')
+  expect(svg?.props.alt).toBe('Clawd at his laptop next to the tap')
+  // Der Laptop steht vor ihm, der Hebel am Hahn ist rot, die Pfütze ist so breit wie bei 20 L.
+  expect(String(svg?.props.source)).toContain('fill="#C9C7C0"')
   expect(String(svg?.props.source)).toContain('#C8372D')
+  expect(String(svg?.props.source)).toContain('rx="12" ry="1"')
   expect(plain((await (app as unknown as Drawing).find({ type: 'Text', text: /≈/ }))?.text)).toMatch(/^ ≈ 2\d,\d L$/)
   await app.unmount()
 })
@@ -1142,7 +1169,7 @@ test('liters follow Mistral: 45 ml per 400 output tokens, all time from /stats p
   expect(allOutput(null, [book], day)).toBe(350)
 })
 
-test('in the endless shower Clawd sings while the water runs, and the steam thickens with the session', async ($, on) => {
+test('in the endless shower Clawd types while the water runs, and the steam thickens with the session', async ($, on) => {
   engine(on)
   const clock = mock.clock(on, { now: NOW })
 
@@ -1151,18 +1178,18 @@ test('in the endless shower Clawd sings while the water runs, and the steam thic
   await cast($, clock, 'dusche')
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
 
-  // Duschhaube, Brause am Rohr; noch kein Dampf, keine Noten, höchstens eine Seifenblase.
-  expect(await tapText(ui)).toBe('▗▄▆▆▆▄▖┳┓')
+  // Brause am Rohr, keine Haube; noch kein Dampf, höchstens eine Seifenblase.
+  expect(await tapText(ui)).toBe('       ┳┓')
   expect(await rowText(ui, 'clawd')).toMatch(/^▐▛███▜▌ ┃[ o°˙]+$/)
   expect(await puddleText(ui)).toBe('')
 
-  // Viel Tempo: der Strahl prasselt neben ihm herab, und er singt.
+  // Viel Tempo: der Strahl prasselt neben ihm herab, und er tippt.
   usages.push({ model: 'claude-opus-5-5', input_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1_000 })
   const close = await openStream($)
   await clock.advance(10)
-  expect(await rowText(ui, 'clawd')).toMatch(/^▐▛███▜▌[┃╏]┃.?[♪♫]/)
+  expect(await rowText(ui, 'clawd')).toMatch(/^▐▛███▜▌[┃╏]┃/)
   const app = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  expect((await svgOf(app))?.props.alt).toBe('Clawd singing in the shower')
+  expect((await svgOf(app))?.props.alt).toBe('Clawd typing fast on his laptop under the running shower')
   await app.unmount()
   await close()
   await clock.advance(DRAIN)
@@ -1176,9 +1203,9 @@ test('in the endless shower Clawd sings while the water runs, and the steam thic
   await ui.unmount()
 
   const steamy = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  expect((await svgOf(steamy))?.props.alt).toBe('Clawd in a shower cap under the shower in thick steam')
-  // Rosa Duschhaube.
-  expect(String((await svgOf(steamy))?.props.source)).toContain('#F2A7C3')
+  expect((await svgOf(steamy))?.props.alt).toBe('Clawd with his laptop under the shower in thick steam')
+  // Keine Duschhaube mehr: er sieht aus wie im Logo.
+  expect(String((await svgOf(steamy))?.props.source)).not.toContain('#F2A7C3')
   await steamy.unmount()
 })
 
@@ -1199,10 +1226,10 @@ test('idle, Clawd blinks; the tap leaks one drop per loop, in the shower soap bu
     await clock.advance(500)
     const source = String((await svgOf(app))?.props.source)
     sources.add(source)
-    if (source.includes('height="0.5" fill="#1F1E1D"')) blinks += 1
+    if (source.includes('y="12" width="2" height="2" fill="#1F1E1D"')) blinks += 1
     if (/<ellipse cx="44" cy="[\d.]+" rx="0.9" ry="1.2"/.test(source)) drops += 1
   }
-  expect(sources.size).toBeGreaterThanOrEqual(8)
+  expect(sources.size).toBeGreaterThanOrEqual(5)
   expect(blinks).toBe(2)
   expect(drops).toBe(3)
   await app.unmount()
@@ -1215,12 +1242,12 @@ test('idle, Clawd blinks; the tap leaks one drop per loop, in the shower soap bu
     if (String((await svgOf(shower))?.props.source).includes('r="1.5" fill="#B1B9F9" fill-opacity="0.15"')) bubbles += 1
   }
   expect(bubbles).toBeGreaterThan(20)
-  // Kommt eine Antwort, ist der Leerlauf vorbei: er singt, keine Seifenblasen.
+  // Kommt eine Antwort, ist der Leerlauf vorbei: er tippt, keine Seifenblasen.
   usages.push({ model: 'claude-opus-5-5', input_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1_000 })
   const close = await openStream($)
   await clock.advance(10)
   const singing = String((await svgOf(shower))?.props.source)
-  expect((await svgOf(shower))?.props.alt).toBe('Clawd singing in the shower')
+  expect((await svgOf(shower))?.props.alt).toBe('Clawd typing fast on his laptop under the running shower')
   expect(singing).not.toContain('fill-opacity="0.15"')
   await close()
   await shower.unmount()

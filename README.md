@@ -6,14 +6,14 @@ Daneben steht Clawd. KI verschwendet Wasser: Rechenzentren verdunsten Kühlwasse
 
 | Rolle | Tempo (Tokens pro Sekunde) | Größe (Tokens der Sitzung) |
 |---|---|---|
-| Hahn | Clawd dreht auf und scrollt am Handy, das Wasser läuft ungenutzt auf den Boden; nur solange Tokens fließen, und umso schneller, je mehr pro Sekunde kommen | Je mehr Liter, desto größer die Pfütze und desto bequemer Clawd: Hocker ab 1 L, Liegestuhl ab 5 L, Sonnenschirm mit Drink ab 20 L |
-| Dusche | Clawd singt mit Duschhaube unter der Dauerdusche, der Strahl prasselt | Der Dampf wird dichter, bis man ihn kaum noch sieht |
+| Hahn | Clawd dreht auf und tippt am Laptop, das Wasser läuft ungenutzt auf den Boden; nur solange Tokens fließen, umso schneller, je mehr pro Sekunde kommen, und der Strahl so dick wie die Liter pro Sekunde | Je mehr Liter, desto größer die Pfütze: ab 1, 5 und 20 L eine Stufe breiter |
+| Dusche | Clawd tippt unter der Dauerdusche am Laptop, der Strahl prasselt auf ihn | Der Dampf wird dichter, bis man ihn kaum noch sieht |
 
-Streamt gerade nichts, läuft eine ruhige Schleife von 15 Sekunden: Clawd blinzelt ab und zu. Am Hahn scrollt er weiter am Handy, und der Hahn ist nie ganz zu, einmal je Schleife tropft er in die Pfütze. Unter der Dusche shampooniert er sich, Seifenblasen steigen auf und zerplatzen. Pool, Wanne und See gab es bis 0.18.0.
+Streamt gerade nichts, läuft eine ruhige Schleife von 15 Sekunden: Clawd blinzelt ab und zu. Am Hahn ruht er am Laptop, und der Hahn ist nie ganz zu, einmal je Schleife tropft er in die Pfütze. Unter der Dusche steigen Seifenblasen auf und zerplatzen. Pool, Wanne und See gab es bis 0.18.0.
 
 Neben jeder Szene steht, wie viel Wasser verschwendet wurde, für den Zeitraum, den der Tokenzähler gerade zeigt. Gerechnet wird nach Mistrals Ökobilanz (2025) mit 45 ml pro 400 ausgegebenen Tokens; für 24h, 7d und 30d zählt der Mod ab Version 0.14.0 selbst mit, „all time“ kommt aus `/stats`.
 
-Beim Start und nach 30 Minuten Pause kommt Clawd erst an, zu Fuß mit Handy oder Handtuch.
+Beim Start und nach 30 Minuten Pause kommt Clawd erst an, zu Fuß mit dem Laptop, zur Dusche auch mit Handtuch.
 
 ## Installieren
 
@@ -56,6 +56,8 @@ VS Code zeichnet keine Svg-Bilder in der Leiste (es zeigt nur deren Beschreibung
 Seit 0.18.0 bleiben die Liter in den Apps stehen, solange Clawd Platz hat: Wird es eng, wird erst Clawd kleiner und rückt mit dem Zähler unter die Limits, dann geht der Preis und erst ganz zuletzt gehen die Liter. Seit 0.19.0 stehen die Liter in voller Farbe statt gedimmt da, damit man sie auch in VS Code lesen kann. Seit 0.23.1 stehen sie in einem eigenen kräftigen Wasserblau und halbfett da. In einer Zeile steht die Leiste nur, wenn Liter und Preis mit hineinpassen. Seit 0.22.0 stehen die Liter in der gestapelten Leiste über dem Zähler rechts neben Clawd; so kosten sie keine Breite und bleiben, solange Clawd dasteht.
 
 Seit 0.23.0 gibt es am Hahn kein Waschbecken mehr: Ein Rohr kommt von oben, das Wasser läuft auf den Boden, und dort wächst die Pfütze mit den verschwendeten Litern. Clawd steht dort 1,2-fach so groß wie gezeichnet. Wie schnell das Wasser läuft, folgt den Tokens pro Sekunde: bei 100 ein Bild alle 150 ms, bei 200 doppelt so schnell, höchstens dreifach, mindestens halb so schnell.
+
+Seit 0.24.0 sieht Clawd in den Apps aus wie im Logo von Claude Code: breiter Körper, hohe schmale Augen, Ärmchen seitlich, vier dünne Beine. Er hält einen Laptop vor sich und tippt, solange Claude arbeitet, mit abwechselnd hochschnellenden Ärmchen und im Tempo der Tokens pro Sekunde; das Display glimmt dabei. Hocker, Liegestuhl, Sonnenschirm, Duschhaube und Singen gibt es nicht mehr: er arbeitet, während das Wasser läuft. Der Strahl am Hahn ist stufenlos so dick wie die Liter pro Sekunde (45 ml je 400 Tokens). Im Terminal bleibt Clawd Text wie bisher, nur ohne Möbel und Haube.
 
 `/tokenstats` liest für die Statistik Claude Codes `/stats`-Zwischenspeicher. Den schreibt Claude Code aber nur neu, wenn `/stats` im Terminal läuft; wer in der Desktop-App oder in VS Code arbeitet, sah dort alte Zahlen. Seit 0.19.0 führt Burn deshalb ein eigenes Tagebuch je Unterhaltung und zählt alle Tage nach dem letzten Rechentag des Zwischenspeichers selbst: Tokens je Modell, Messages, Tool-Calls, Sitzungen und Startstunden. Messages zählt Burn wie die Zeilen im Transkript (Prompts, Antwortblöcke, Tool-Ergebnisse); Anhänge und Systemzeilen, die `/stats` mitzählt, sieht der Mod nicht, deshalb liegt der Wert etwas darunter. Tokens, die Burn vor 0.19.0 nur im Stundenbuch gezählt hat, stehen ohne Modell als „Untracked“.
 

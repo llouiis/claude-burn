@@ -2,9 +2,10 @@
 // für die Tokens pro Sekunde (nur solange gestreamt wird) und die Größe für die Sitzung. Zu
 // Beginn und nach einer langen Pause kommt er erst an. Das Thema: KI verschwendet Wasser, jede
 // Antwort kostet ein paar Schlucke; unter jeder Szene stehen die Liter.
-//   Hahn:    Clawd dreht auf und scrollt am Handy, das Wasser läuft in den Abfluss. Je mehr Liter,
-//            desto bequemer: Hocker, Liegestuhl, Sonnenschirm mit Drink.
-//   Dusche:  Clawd singt unter der Dauerdusche, der Dampf wird mit der Sitzung dichter.
+//   Hahn:    Clawd dreht auf und tippt am Laptop, das Wasser läuft auf den Boden; die Pfütze
+//            wächst mit den Litern, der Strahl mit den Litern pro Sekunde.
+//   Dusche:  Clawd tippt unter der Dauerdusche, der Dampf wird mit der Sitzung dichter.
+// Clawd sieht aus wie im Logo von Claude Code und tippt, solange Claude arbeitet.
 // Pool, Wanne und See gab es bis 0.18.0.
 
 export type Color = 'claude' | 'error' | 'warning' | 'suggestion' | 'inactive' | 'success'
@@ -67,11 +68,21 @@ export type Scene = {
   idle?: number
   // Die verschwendeten Liter, wie sie unter der Szene stehen
   liters?: string
+  // Milliliter pro Sekunde, solange gestreamt wird: so dick ist der Strahl am Hahn
+  mlPerSecond?: number
 }
+// Der Strahl am Hahn wächst stufenlos mit den Litern pro Sekunde: 4,5 ml/s (40 Tokens/s) sind
+// knapp 1 Einheit, 22,5 ml/s (200) rund 2, ab gut 40 ml/s 3,5. Ohne Messung wie die Stärke.
+export const jetWidth = (scene: Scene) =>
+  scene.mlPerSecond === undefined || scene.mlPerSecond <= 0
+    ? scene.strength === 3
+      ? 2
+      : 1.1
+    : Math.max(0.7, Math.min(3.5, 0.5 + scene.mlPerSecond * 0.07))
 
 // Der Leerlauf: steht Clawd da und es streamt nichts, läuft eine ruhige Schleife von 15 s im
 // Halbsekundentakt. Er blinzelt zweimal; am Hahn scrollt er weiter, und der Hahn ist nie ganz zu:
-// einmal je Schleife tropft er ins Becken. Unter der Dusche shampooniert er sich, Seifenblasen
+// einmal je Schleife tropft er in die Pfütze. Unter der Dusche shampooniert er sich, Seifenblasen
 // steigen schräg auf und zerplatzen.
 export const IDLE_LOOP = 30
 export const isBlinking = (idle: number | undefined) => idle === 6 || idle === 21
@@ -88,7 +99,7 @@ export function bubblesAt(idle: number | undefined): Bubble[] {
     if (phase > 6) return []
     const t = Math.min(phase, 5) / 5
 
-    return [{ x: 22.5 + t * 6 + (phase % 2) * 0.6, y: 9.5 - t * 5.5, isPopping: phase === 6 }]
+    return [{ x: 32 + t * 5 + (phase % 2) * 0.6, y: 12 - t * 6.5, isPopping: phase === 6 }]
   })
 }
 
@@ -103,11 +114,10 @@ export function literText(ml: number): string {
 
   return `≈ ${shown} L`
 }
-// Am Hahn zählt die Größe in Litern der Sitzung: 1 sobald etwas lief, dann je eine Stufe bequemer
-// ab 1, 5 und 20 L (Hocker, Liegestuhl, Sonnenschirm mit Drink).
+// Am Hahn zählt die Größe in Litern der Sitzung: 1 sobald etwas lief, dann je eine Stufe mehr
+// Pfütze ab 1, 5 und 20 L.
 const COMFORT_AT = [1_000, 5_000, 20_000]
 export const tapLevel = (ml: number) => (ml < 0.5 ? 0 : 1 + COMFORT_AT.filter(at => ml >= at).length)
-const comfortOf = (level: number) => Math.max(0, Math.min(3, level - 1))
 
 // ---------- Terminal ----------
 // Drei Zeilen, je neun Spalten für Clawd: Kopf in der Leiste, darunter zwei Zeilen. Rechts davon
@@ -150,16 +160,6 @@ const CLAWD: Piece[] = [{ text: '▐▛███▜▌', color: 'claude' }, { te
 const TAP: Piece[] = [{ text: '┓', color: 'inactive' }]
 const TAP_OPEN: Piece[] = [{ text: '┻', color: 'error' }]
 const TAP_SHUT: Piece[] = [{ text: '━', color: 'error' }]
-// Der Sonnenschirm ab 20 L, rot und weiß gestreift.
-const PARASOL: Piece[] = [
-  { text: '▗▄', color: 'error' },
-  { text: '▆', color: 'inactive' },
-  { text: '█', color: 'error' },
-  { text: '▆', color: 'inactive' },
-  { text: '▄▖', color: 'error' },
-]
-// Rosa Duschhaube mit Rüschen.
-const SHOWER_CAP: Piece[] = [{ text: '▗▄▆▆▆▄▖', color: 'error' }]
 // Was Clawd beim Herlaufen trägt: das Handy oder ein Handtuch.
 const CARRIED: Record<Role, Piece> = {
   tap: { text: '▮', color: 'suggestion' },
@@ -170,23 +170,16 @@ const CARRIED: Record<Role, Piece> = {
 type Parts = { head: Cell[]; slots: Cell[][]; rights: Cell[][] }
 
 // Hahn: der Hahn hängt in der Leiste (Spalten 7 bis 9), das Wasser fällt in Spalte 8 auf den
-// Boden, wo eine Pfütze steht, sobald etwas lief. Clawd hält das Handy in Spalte 7 und sieht nicht hin. Mit
-// den Litern wird er bequemer: auf dem Hocker, im Liegestuhl, dann unterm Sonnenschirm mit Drink.
-const SEATS = [
-  [{ text: ' ▘▘ ▝▝ ', color: 'claude' }],
-  [{ text: ' ╤═══╤ ', color: 'warning' }],
-  [{ text: '╲', color: 'inactive' }, { text: '▚▚▚▚▚', color: 'warning' }, { text: '╱', color: 'inactive' }],
-] satisfies Piece[][]
+// Boden, wo eine Pfütze steht, sobald etwas lief. Clawd hält das Handy in Spalte 7 und sieht
+// nicht hin; er steht und arbeitet, statt es sich bequem zu machen.
 export const isTapOpen = (arrival: number) => arrival < 0 || arrival > ARRIVE.in
 function tapParts(scene: Scene): Parts {
   const { water, strength, tick, level, arrival } = scene
-  const comfort = comfortOf(level)
-  const head = [...(comfort === 3 ? cellsOf(PARASOL) : blank(7)), ...cellsOf(isTapOpen(arrival) ? TAP_OPEN : TAP_SHUT), ...cellsOf(TAP)]
+  const head = [...blank(7), ...cellsOf(isTapOpen(arrival) ? TAP_OPEN : TAP_SHUT), ...cellsOf(TAP)]
   // Das Handy leuchtet; beim Scrollen flackert es ab und zu.
   const top: Cell[] = [...cellsOf([{ text: '▐▛███▜▌', color: 'claude' }]), { ch: '▮', color: 'suggestion', dim: tick % 5 === 4 }, BLANK]
-  const low: Cell[] = cellsOf(SEATS[Math.min(2, comfort)] ?? [])
+  const low: Cell[] = cellsOf(LEGS).slice(0, 7)
   const right: Cell[] = []
-  if (comfort === 3) put(right, 2, { ch: '▿', color: 'warning' })
   const puddle: Cell = level === 0 && water === null ? BLANK : { ch: '▁', color: 'suggestion', dim: true }
   let drain = puddle
   if (water !== null) {
@@ -217,12 +210,12 @@ function falling(water: Flow | null, strength: number, tick: number, rows: Cell[
   for (const row of rows) put(row, col, { ch, color: 'suggestion' })
 }
 
-// Dusche: die Haube auf Clawds Kopf, daneben der Brausekopf am Rohr (Spalten 7 und 8); das Wasser
-// prasselt in Spalte 7 neben ihm herab. Solange es läuft, singt er, die Noten steigen rechts auf.
+// Dusche: neben Clawd der Brausekopf am Rohr (Spalten 7 und 8); das Wasser prasselt in Spalte 7
+// neben ihm herab.
 // Der Dampf wächst mit der Sitzung, erst unten, dann auch oben.
 function showerParts(scene: Scene): Parts {
   const { water, strength, tick, level } = scene
-  const head: Cell[] = [...cellsOf(SHOWER_CAP), { ch: '┳', color: 'inactive' }, { ch: '┓', color: 'inactive' }]
+  const head: Cell[] = [...blank(7), { ch: '┳', color: 'inactive' }, { ch: '┓', color: 'inactive' }]
   const top = cellsOf(CLAWD)
   const low = cellsOf(LEGS)
   top[8] = { ch: '┃', color: 'inactive' }
@@ -231,10 +224,9 @@ function showerParts(scene: Scene): Parts {
   if (water !== null && water.isSplash) low[7] = { ch: ',', color: 'suggestion' }
   const steam = (n: number) => Array.from({ length: Math.max(0, n) }, (_, i) => ({ ch: (i + tick) % 3 === 0 ? '▒' : '░', color: 'inactive', dim: true }) satisfies Cell)
   const rights = [steam(level - 3), steam(level)]
-  if (water !== null) put(rights[0] ?? [], 1 + (tick % 2), { ch: tick % 4 < 2 ? '♪' : '♫', color: 'warning' })
   // Im Leerlauf steigen rechts neben dem Rohr Seifenblasen auf.
   for (const bubble of bubblesAt(scene.idle)) {
-    put(rights[0] ?? [], Math.round((bubble.x - 22.5) / 3), { ch: bubble.isPopping ? '˙' : bubble.y > 6 ? 'o' : '°', color: 'suggestion' })
+    put(rights[0] ?? [], Math.round((bubble.x - 32) / 3), { ch: bubble.isPopping ? '˙' : bubble.y > 6 ? 'o' : '°', color: 'suggestion' })
   }
 
   return { head, slots: [top, low], rights }
@@ -315,7 +307,7 @@ export const SCENE_SVG = { width: 80, height: 36 }
 // Szenenpixel, also scharf, und groß genug, dass man Clawd gut erkennt. Wird es eng, steht er
 // 1,5-fach (90 × 41; die halbe Zeile zu 41 bleibt unten frei, preserveAspectRatio oben bündig),
 // gestapelt 1,5-fach, damit die Leiste flach bleibt; im ganz schmalen Panel 1-fach (60 × 27).
-// Ein engerer Ausschnitt ginge nicht: Sonnenschirm, Dampf und Noten reichen bis an den Rand.
+// Ein engerer Ausschnitt ginge nicht: Dampf und Pfütze reichen bis an den Rand.
 export const appScene = (scale: number) => ({ width: SCENE_VIEW.width * scale, height: Math.ceil(SCENE_VIEW.height * scale) })
 export const APP_LARGE = 2
 export const APP_SMALL = 1.5
@@ -366,43 +358,45 @@ const px = (x: number, y: number, w: number, h: number, c: string, extra = '') =
   `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="${c}"${extra}/>`
 const crisp = (inner: string) => `<g shape-rendering="crispEdges">${inner}</g>`
 
-// Clawd selbst, im Kostüm seiner Rolle; `step` hebt beim Gehen jedes zweite Bein, `isSinging`
-// kneift unter der Dusche die Augen zu.
-const CAP_PINK = '#F2A7C3'
+// Clawd wie im Logo von Claude Code (▐▛███▜▌ / ▝▜█████▛▘ / ▘▘ ▝▝), quadratisch gerastert:
+// 16 × 10 Pixel zu je 2 Einheiten, die Füße auf y 26. Breiter Körper, hohe schmale Augen,
+// die Ärmchen seitlich, vier dünne Beine.
 const TOWEL = '#F4F1EA'
 // Ein Pixelrechteck der Szene: x, y, Breite, Höhe, Farbe. Svg und die Box-Pixel für VS Code
 // zeichnen aus denselben Listen.
 type Shape = [number, number, number, number, string]
 const pxOf = (shapes: Shape[]) => shapes.map(([x, y, w, h, c]) => px(x, y, w, h, c)).join('')
-// `isSinging` kneift die Augen zu, so blinzelt er auch.
-function clawdShapes(role: Role, step: number, isSinging = false): Shape[] {
-  const legs = [8, 12, 18, 22]
-  const parts: Shape[] = [
-    [4, 15, 4, 4, INK.clay],
-    [8, 12, 16, 10, INK.clay],
-    [24, 15, 4, 4, INK.clay],
-    ...(isSinging
-      ? ([[10, 15, 2, 1, INK.ink], [20, 15, 2, 1, INK.ink]] satisfies Shape[])
-      : ([[10, 14, 2, 2, INK.ink], [20, 14, 2, 2, INK.ink]] satisfies Shape[])),
-    ...legs.map((x, i): Shape => [x, 22 - (step % 2 === 1 && i % 2 === 1 ? 1 : 0), 2, 4, INK.clay]),
-  ]
-  if (role === 'shower') {
-    // Rosa Duschhaube mit weißen Tupfen und Rüschenrand
-    parts.push(
-      [11, 8, 10, 1, CAP_PINK],
-      [9, 9, 14, 3, CAP_PINK],
-      [8, 11.5, 16, 1, '#E58BAE'],
-      [12, 9.5, 1, 1, TOWEL],
-      [16, 9, 1, 1, TOWEL],
-      [20, 10, 1, 1, TOWEL],
-    )
-  }
+// `step` hebt beim Gehen jedes zweite Bein; `typing` 0 oder 1 hebt beim Tippen abwechselnd ein
+// Ärmchen (-1 ruht); `isLit`: das Display leuchtet, die Oberkante des Deckels glimmt.
+type Pose = { step?: number; isBlink?: boolean; typing?: number; isLit?: boolean }
+function clawdShapes({ step = 0, isBlink = false, typing = -1 }: Pose): Shape[] {
+  const lift = (i: number) => (step % 2 === 1 && i % 2 === 1 ? 2 : 0)
+  const eyes: Shape[] = isBlink
+    ? [[10, 12, 2, 2, INK.ink], [24, 12, 2, 2, INK.ink]]
+    : [[10, 10, 2, 4, INK.ink], [24, 10, 2, 4, INK.ink]]
 
-  return parts
+  return [
+    [6, 6, 24, 16, INK.clay],
+    [2, typing === 0 ? 11 : 14, 4, 4, INK.clay],
+    [30, typing === 1 ? 11 : 14, 4, 4, INK.clay],
+    ...eyes,
+    ...[8, 12, 22, 26].map((x, i): Shape => [x, 22, 2, 4 - lift(i), INK.clay]),
+  ]
 }
-const clawdPx = (role: Role, step: number, isSinging = false) => crisp(pxOf(clawdShapes(role, step, isSinging)))
+// Der Laptop, aufgeklappt vor ihm: von vorn sieht man den Deckel, darunter die Tastatur.
+const SCREEN = '#9FD8FF'
+const LAPTOP: Shape[] = [[10, 15.6, 16, 4.4, '#C9C7C0'], [8, 20, 20, 1.4, '#8D8B85']]
+const laptopOf = (pose: Pose): Shape[] => (pose.isLit === true ? [...LAPTOP, [10, 15.6, 16, 0.8, SCREEN]] : LAPTOP)
+const clawdPx = (pose: Pose) => crisp(pxOf([...clawdShapes(pose), ...laptopOf(pose)]))
 // Was Clawd unter die Dusche mitbringt: ein Handtuch über der Schulter.
-const towelPx = crisp(px(5, 11.5, 6, 1.2, TOWEL) + px(5, 12.7, 2, 6, TOWEL) + px(5, 16, 2, 0.6, INK.red))
+const TOWEL_SHAPES: Shape[] = [[4, 6, 8, 1.2, TOWEL], [4, 7.2, 2, 7, TOWEL], [4, 11, 2, 0.6, INK.red]]
+const towelPx = crisp(pxOf(TOWEL_SHAPES))
+// Arbeitet Claude, tippt er; im Leerlauf (idle ab 0) ruht er, auch wenn der Hahn tropft.
+const poseOf = (scene: Scene): Pose => {
+  const isWorking = scene.arrival < 0 && scene.water !== null && (scene.idle ?? -1) < 0
+
+  return { isBlink: !isWorking && isBlinking(scene.idle), typing: isWorking ? scene.tick % 2 : -1, isLit: isWorking }
+}
 
 const splashSvg = (x: number, y: number, colors: SceneColors) =>
   `<ellipse cx="${x}" cy="${y}" rx="2.5" ry="0.9" fill="none" stroke="${colors.suggestion}" stroke-opacity="0.6" stroke-width="0.7"/><circle cx="${x - 1.5}" cy="${y - 2}" r="0.6" fill="${colors.suggestion}" fill-opacity="0.7"/><circle cx="${x + 1.5}" cy="${y - 2.5}" r="0.6" fill="${colors.suggestion}" fill-opacity="0.7"/>`
@@ -444,7 +438,7 @@ function faucetSvg(scene: Scene, colors: SceneColors, isOpen: boolean): string {
       stream = splashSvg(SPOUT.x, FLOOR.y, colors)
     }
     if (water.jet > 0) {
-      const width = strength === 3 ? 2 : 1.1
+      const width = jetWidth(scene)
       stream =
         `<path d="M${SPOUT.x} ${SPOUT.y} L${SPOUT.x} ${FLOOR.y}" stroke="${colors.suggestion}" stroke-opacity="0.85" stroke-width="${width}" stroke-dasharray="${strength === 3 ? '3 0.8' : '2 1.2'}" stroke-dashoffset="${-(tick % 4) * 0.9}"/>` +
         // Wo der Strahl aufschlägt, laufen Ringe durch die Pfütze, beim starken Strahl ein zweiter.
@@ -466,135 +460,54 @@ function faucetSvg(scene: Scene, colors: SceneColors, isOpen: boolean): string {
   return puddle + pipe + lever + stream
 }
 
-// Clawd am Hahn: das Handy in der vorderen Schere, der Blick gesenkt. `comfort` 0 steht er,
-// 1 sitzt er auf dem Hocker, 2 liegt er im Liegestuhl, 3 dazu unterm Sonnenschirm mit Drink.
-const SCREEN = '#9FD8FF'
-// Clawd am Hahn steht samt Möbeln größer als gezeichnet, verankert links am Boden.
-const IDLER_SCALE = 1.2
-const IDLER_FOOT = { x: 0, y: GROUND }
-const IDLER_MATRIX: Matrix = [IDLER_SCALE, 0, 0, IDLER_SCALE, IDLER_FOOT.x * (1 - IDLER_SCALE), IDLER_FOOT.y * (1 - IDLER_SCALE)]
-const idlerGroup = (inner: string) =>
-  `<g transform="matrix(${IDLER_MATRIX.map(n => Number(n.toFixed(3))).join(' ')})">${inner}</g>`
-// Clawd am Handy, ohne die scrollende Zeile (die hat im Svg eine Deckkraft).
-function idlerShapes(comfort: number, step: number, isBlink = false): Shape[] {
-  const lift = (i: number) => (step % 2 === 1 && i % 2 === 1 ? 1 : 0)
-  // Stehend vier Beine, auf dem Hocker baumeln zwei, im Liegestuhl sind sie angezogen.
-  const legs: Shape[] =
-    comfort === 0
-      ? [8, 12, 18, 22].map((x, i): Shape => [x, 22 - lift(i), 2, 4, INK.clay])
-      : comfort === 1
-        ? [[10, 22, 2, 2.5, INK.clay], [20, 22, 2, 2.5, INK.clay]]
-        : []
 
-  return [
-    [4, 15, 4, 4, INK.clay],
-    [8, 12, 16, 10, INK.clay],
-    [24, 15, 2, 3, INK.clay],
-    ...(isBlink
-      ? ([[11, 15.6, 2, 0.5, INK.ink], [19, 15.6, 2, 0.5, INK.ink]] satisfies Shape[])
-      : ([[11, 15, 2, 1.2, INK.ink], [19, 15, 2, 1.2, INK.ink]] satisfies Shape[])),
-    ...legs,
-    // Das Handy: dunkle Hülle, das Display leuchtet.
-    [25.6, 12, 2.8, 4.6, INK.boot],
-    [26, 12.5, 2, 3.6, SCREEN],
-  ]
-}
-function idlerPx(comfort: number, step: number, tick: number, isBlink = false): string {
-  // Eine Zeile scrollt über das Display.
-  const shape = pxOf(idlerShapes(comfort, step, isBlink)) + px(26, 12.6 + (tick % 4) * 0.8, 2, 0.4, '#FFFFFF', ' fill-opacity="0.8"')
-  const body = crisp(shape)
-  if (comfort === 0) return body
-  if (comfort === 1) {
-    // Holzhocker, Clawd sitzt eine Spur tiefer darauf.
-    return (
-      `<g transform="translate(0 2)">${body}</g>` +
-      crisp(px(6, 24.6, 20, 1.4, INK.wood) + px(7.5, 26, 1.4, GROUND - 26, INK.crust) + px(23.1, 26, 1.4, GROUND - 26, INK.crust))
-    )
-  }
-  // Liegestuhl: gestreifter Stoff zwischen schrägem Rücken und Sitz, Clawd lehnt sich hinein.
-  const chair =
-    `<path d="M4 13 L11 24.5 L28 24.5" fill="none" stroke="${INK.wood}" stroke-width="3.2" stroke-linejoin="round"/>` +
-    `<path d="M4 13 L11 24.5 L28 24.5" fill="none" stroke="${INK.red}" stroke-width="3.2" stroke-dasharray="1.6 1.6" stroke-linejoin="round"/>` +
-    `<path d="M11 24.5 L8 ${GROUND} M28 24.5 L28 ${GROUND} M6 16 L3 ${GROUND}" stroke="${INK.crust}" stroke-width="1"/>`
-  // Gedreht ohne crispEdges, sonst werden die schrägen Kanten treppig.
-  const lying = `<g transform="translate(3 3) rotate(-24 16 22)">${shape}</g>`
-  if (comfort === 2) return chair + lying
-  // Sonnenschirm und ein Drink auf dem Beistelltisch.
-  const parasol =
-    `<path d="M2.5 4.5 L2.5 ${GROUND}" stroke="${INK.concrete}" stroke-width="0.9"/>` +
-    `<path d="M-9 9 Q 2.5 0.5 14 9 Z" fill="${INK.red}"/>` +
-    `<path d="M-1.5 8.6 Q 2.5 2.4 6.5 8.6 Z" fill="${INK.silver}"/>` +
-    `<path d="M-9 9 Q -6 10 -3.3 9 Q -0.6 10 2.5 9 Q 5.6 10 8.3 9 Q 11 10 14 9" fill="none" stroke="${INK.brim}" stroke-width="0.6"/>`
-  const drink =
-    crisp(px(29.5, 22.2, 5, 0.8, INK.wood) + px(31.5, 23, 1, GROUND - 23, INK.crust)) +
-    `<path d="M30 18 L34 18 L32 20.4 Z" fill="${SCREEN}" fill-opacity="0.85"/>` +
-    `<path d="M32 20.4 L32 22.2" stroke="${INK.glassEdge}" stroke-width="0.4"/>` +
-    `<path d="M32.6 18 L34.2 15.8" stroke="${INK.red}" stroke-width="0.4"/>` +
-    `<circle cx="30.3" cy="18" r="0.9" fill="${INK.orange}"/>`
-
-  return parasol + chair + lying + drink
-}
-
-// Dusche: hinten das Rohr mit rotem Drehknopf, oben der Brausekopf über Clawds Haube, unten die
-// Duschwanne. Das Wasser prasselt auf die Haube und rinnt an ihm herab; solange es läuft, singt er.
+// Dusche: hinten das Rohr mit rotem Drehknopf, oben der Brausekopf über Clawd, unten die
+// Duschwanne. Das Wasser prasselt auf seinen Kopf und rinnt an ihm herab; er tippt weiter.
 // Der Dampf wird mit der Sitzung dichter, bis Clawd fast verschwindet.
-const BRAUSE = { left: 11, right: 21, y: 5 }
+const BRAUSE = { left: 11, right: 25, y: 5 }
 function showerBackSvg(colors: SceneColors): string {
   return (
     crisp(
       [
-        px(32.5, 3.6, 1.6, GROUND - 3.6, INK.concrete),
-        px(16, 3.6, 18, 1.2, INK.concreteTop),
-        px(15.4, 3.6, 1.2, 1.4, INK.concreteTop),
-        px(0.5, GROUND - 1, 35, 1, colors.isLight === true ? INK.concrete : TOWEL),
+        px(36, 3, 1.6, GROUND - 3, INK.concrete),
+        px(18, 3, 19.6, 1.2, INK.concreteTop),
+        px(17.4, 3, 1.2, 1.6, INK.concreteTop),
+        px(0.5, GROUND - 1, 38, 1, colors.isLight === true ? INK.concrete : TOWEL),
       ].join(''),
     ) +
     `<path d="M${BRAUSE.left} ${BRAUSE.y} L${BRAUSE.right} ${BRAUSE.y} L${BRAUSE.right - 1.5} ${BRAUSE.y - 1.2} L${BRAUSE.left + 1.5} ${BRAUSE.y - 1.2} Z" fill="${INK.concreteTop}"/>` +
-    `<circle cx="33.3" cy="16" r="1.3" fill="${INK.red}"/>`
+    `<circle cx="36.8" cy="16" r="1.3" fill="${INK.red}"/>`
   )
 }
-const STEAM_PUFFS: [number, number, number][] = [[4, 23, 3], [30, 20, 3.5], [6, 8, 3], [27, 8, 3.5], [16, 25, 3.5], [1.5, 15, 2.6], [36, 12, 4], [24, 25, 3.2], [13, 4, 3.5], [40, 5, 4]]
+// Die Dampfschwaden ziehen um Clawd herum; sein Gesicht (x 8 bis 28, y 8 bis 16) bleibt frei.
+const STEAM_PUFFS: [number, number, number][] = [[3, 24, 3], [33, 22, 3.5], [2, 8, 2.6], [34, 9, 3], [18, 27, 3], [1, 16, 2.4], [42, 14, 4], [28, 26, 3], [16, 3, 2.5], [44, 5, 4]]
 function showerSvg(scene: Scene, colors: SceneColors, isHere: boolean): string {
   const { water, strength, tick, level } = scene
   const wet = `fill="${colors.suggestion}"`
   let rain = ''
   if (isHere && water !== null) {
-    const xs = [12.5, 14.5, 16.5, 18.5, 20]
     const drop = water.drop
     if (drop !== null) {
-      // Tropfen: fallen vom Brausekopf auf die Haube, abwechselnd links und rechts.
-      rain = xs
+      // Tropfen: laufen ihm abwechselnd links und rechts herab.
+      rain = [4.5, 31.5]
         .filter((_, i) => i % 2 === tick % 2)
-        .map(x => `<ellipse cx="${x}" cy="${(BRAUSE.y + 0.8 + drop * 0.9).toFixed(1)}" rx="0.5" ry="0.8" ${wet} fill-opacity="0.9"/>`)
+        .map(x => `<ellipse cx="${x}" cy="${(7 + drop * 7).toFixed(1)}" rx="0.5" ry="0.8" ${wet} fill-opacity="0.9"/>`)
         .join('')
     } else if (water.jet > 0) {
       const width = strength === 3 ? 0.8 : 0.5
-      rain = xs
-        .map(x => `<path d="M${x} ${BRAUSE.y} L${x} 8" stroke="${colors.suggestion}" stroke-width="${width}" stroke-dasharray="1 0.6" stroke-dashoffset="${-(tick % 3) * 0.5}"/>`)
+      rain = [13, 16, 19, 22]
+        .map(x => `<path d="M${x} ${BRAUSE.y} L${x} 6.5" stroke="${colors.suggestion}" stroke-width="${width}"/>`)
         .join('')
-      // Es rinnt an beiden Seiten herab bis in die Duschwanne.
-      rain += [6.5, 25.5]
-        .map(x => `<path d="M${x} 12 L${x} ${GROUND - 1}" stroke="${colors.suggestion}" stroke-opacity="0.7" stroke-width="${width}" stroke-dasharray="1.6 1" stroke-dashoffset="${-(tick % 3) * 0.8}"/>`)
+      // Es prasselt auf seinen Kopf und rinnt an beiden Seiten herab bis in die Duschwanne.
+      rain += [4.5, 31.5]
+        .map(x => `<path d="M${x} 6 L${x} ${GROUND - 1}" stroke="${colors.suggestion}" stroke-opacity="0.7" stroke-width="${width}" stroke-dasharray="1.6 1" stroke-dashoffset="${-(tick % 3) * 0.8}"/>`)
         .join('')
-      if (strength === 3) rain += [[9, 8.5], [23, 8], [7.5, 10]].map(([x, y]) => `<circle cx="${x}" cy="${(y ?? 0) - (tick % 2)}" r="0.45" ${wet}/>`).join('')
+      if (strength === 3) rain += [[9, 5.5], [27, 5], [7, 7]].map(([x, y]) => `<circle cx="${x}" cy="${(y ?? 0) - (tick % 2) * 0.6}" r="0.45" ${wet}/>`).join('')
     } else if (water.isSplash) {
-      rain = splashSvg(16, 8.5, colors)
+      rain = splashSvg(18, 6, colors)
     }
   }
-  // Noten steigen rechts auf, im Takt versetzt.
-  const notes =
-    isHere && water !== null
-      ? [0, 1]
-          .map(i => {
-            const k = (tick + i * 2) % 4
-            const x = 27 + i * 3 + k * 0.6
-            const y = 11 - k * 1.6 - i
-            return `<ellipse cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" rx="0.9" ry="0.65" fill="${INK.gold}"/><path d="M${(x + 0.8).toFixed(1)} ${y.toFixed(1)} l 0 -3 l 1.2 0.8" fill="none" stroke="${INK.gold}" stroke-width="0.4"/>`
-          })
-          .join('')
-      : ''
-  // Dampfschwaden: mit jeder Stufe einer mehr und alle dichter. Sie ziehen um Clawd herum,
-  // über der Haube und unten um die Beine, sein Gesicht (x 8 bis 24, y 12 bis 19) bleibt frei.
+  // Dampfschwaden: mit jeder Stufe einer mehr und alle dichter, sein Gesicht bleibt frei.
   // Auf hellem Grund ist der Dampf grau statt weiß.
   const puff = colors.isLight === true ? INK.concrete : '#FFFFFF'
   const steam = STEAM_PUFFS
@@ -614,13 +527,12 @@ function showerSvg(scene: Scene, colors: SceneColors, isHere: boolean): string {
         .join('')
     : ''
 
-  return rain + notes + steam + bubbles
+  return rain + steam + bubbles
 }
 
 export function sceneSvg(scene: Scene, colors: SceneColors): string {
-  const { role, water, tick, level, arrival } = scene
+  const { role, water, arrival } = scene
   const isHere = arrival < 0
-  const isOn = isHere && water !== null
   const back: string[] = []
   const front: string[] = []
 
@@ -632,24 +544,22 @@ export function sceneSvg(scene: Scene, colors: SceneColors): string {
     front.push(showerSvg(scene, colors, isHere))
   }
 
-  // Die Anfahrt: Clawd läuft von links herein und trägt, was er braucht.
+  // Die Anfahrt: Clawd läuft mit dem Laptop von links herein, zur Dusche mit Handtuch.
   let clawd = ''
   if (arrival >= 0) {
     const walked = Math.min(1, arrival / ARRIVE.in)
     const step = walked < 1 ? arrival : 0
-    const walker = role === 'tap' ? idlerGroup(idlerPx(0, step, tick)) : clawdPx(role, step) + (walked < 1 ? towelPx : '')
+    const walker = clawdPx({ step }) + (role === 'shower' && walked < 1 ? towelPx : '')
     clawd = `<g transform="translate(${(-32 * (1 - walked)).toFixed(1)} 0)">${walker}</g>`
-  } else if (role === 'tap') {
-    clawd = idlerGroup(idlerPx(comfortOf(level), 0, tick, isBlinking(scene.idle)))
   } else {
-    clawd = clawdPx(role, 0, isOn || isBlinking(scene.idle))
+    clawd = clawdPx(poseOf(scene))
   }
   const { x, y, width, height } = SCENE_VIEW
   // Was hereinkommt, blendet am linken Rand weich ein, statt dort hart abgeschnitten zu sein; bis
-  // x 4, wo Clawds Schere beginnt, damit er angekommen nicht verblasst.
+  // x 2, wo Clawds Ärmchen beginnt, damit er angekommen nicht verblasst.
   const fade =
     arrival >= 0
-      ? `<defs><linearGradient id="burn-rand" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="4" y2="0"><stop offset="0" stop-color="#000"/><stop offset="1" stop-color="#FFF"/></linearGradient><mask id="burn-einfahrt" maskUnits="userSpaceOnUse" x="-60" y="0" width="180" height="40"><rect x="-60" y="0" width="180" height="40" fill="url(#burn-rand)"/></mask></defs>`
+      ? `<defs><linearGradient id="burn-rand" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="2" y2="0"><stop offset="0" stop-color="#000"/><stop offset="1" stop-color="#FFF"/></linearGradient><mask id="burn-einfahrt" maskUnits="userSpaceOnUse" x="-60" y="0" width="180" height="40"><rect x="-60" y="0" width="180" height="40" fill="url(#burn-rand)"/></mask></defs>`
       : ''
   const soft = (inner: string) => (arrival >= 0 && inner !== '' ? `<g mask="url(#burn-einfahrt)">${inner}</g>` : inner)
 
@@ -766,8 +676,10 @@ export function scenePixels(scene: Scene, colors: SceneColors): Pixels {
     if (water.drop !== null) {
       p.rect(x - 1, from + 1 + ((to - from - 2) * water.drop) / 2, 2, 2, wet, 3)
     } else if (water.jet > 0) {
+      // So dick wie in der Svg, mindestens aber so, dass er eine Zelle trifft.
+      const width = Math.max(1.4, jetWidth(scene))
       for (let y = from; y < to; y += 2) {
-        if ((Math.round(y / 2) + tick) % 3 !== 0) p.rect(x - (strength === 3 ? 1 : 0.7), y, strength === 3 ? 2 : 1.4, 2, wet, 2)
+        if ((Math.round(y / 2) + tick) % 3 !== 0) p.rect(x - width / 2, y, width, 2, wet, 2)
       }
     } else if (water.isSplash) {
       p.rect(x - 3, to - 1, 6, 1.4, wet, 2)
@@ -783,66 +695,36 @@ export function scenePixels(scene: Scene, colors: SceneColors): Pixels {
     if (isTapOpen(arrival)) p.line(50.2, 9.6, 53.4, 6.4, 1.3, INK.red)
     else p.line(50.2, 8.6, 54.4, 8.6, 1.3, INK.red)
     fall(SPOUT.x, SPOUT.y, FLOOR.y)
-    const comfort = comfortOf(level)
-    p.within(IDLER_MATRIX, () => {
-      if (!isHere) {
-        walkIn(() => p.shapes(idlerShapes(0, step)))
-      } else if (comfort === 0) {
-        p.shapes(idlerShapes(0, 0, isBlinking(scene.idle)))
-      } else if (comfort === 1) {
-        p.within(moved(0, 2), () => p.shapes(idlerShapes(1, 0, isBlinking(scene.idle))))
-        p.rect(6, 24.6, 20, 1.4, INK.wood, 3)
-        p.rect(7.5, 26, 1.4, GROUND - 26, INK.crust, 2)
-        p.rect(23.1, 26, 1.4, GROUND - 26, INK.crust, 2)
-      } else {
-        if (comfort === 3) {
-          // Sonnenschirm, rot mit weißer Mitte, und der Drink.
-          p.line(2.5, 4.5, 2.5, GROUND, 0.9, INK.concrete)
-          p.rect(-9, 6, 23, 3, INK.red)
-          p.rect(-1, 5, 7, 2, INK.silver, 3)
-          p.rect(29.5, 22.2, 5, 1, INK.wood, 3)
-          p.rect(31.5, 23, 1, GROUND - 23, INK.crust, 2)
-          p.rect(30, 18, 4, 2.4, SCREEN, 3)
-          p.oval(30.3, 18, 1, 1, INK.orange, 2)
-        }
-        // Liegestuhl: Rücken und Sitz gestreift, Clawd lehnt sich gedreht hinein.
-        p.line(4, 13, 11, 24.5, 3.2, INK.wood)
-        p.line(11, 24.5, 28, 24.5, 3.2, INK.red)
-        p.line(11, 24.5, 8, GROUND, 1, INK.crust)
-        p.line(28, 24.5, 28, GROUND, 1, INK.crust)
-        p.within(times(moved(3, 3), turned(-24, 16, 22)), () => p.shapes(idlerShapes(2, 0, isBlinking(scene.idle))))
-      }
-    })
+    if (!isHere) walkIn(() => p.shapes([...clawdShapes({ step }), ...LAPTOP]))
+    else p.shapes([...clawdShapes(poseOf(scene)), ...laptopOf(poseOf(scene))])
   } else {
     // Rohr, Brausekopf, Duschwanne; der Dampf zieht hinter Clawd, das Gesicht bleibt frei.
-    p.rect(32.5, 3.6, 1.6, GROUND - 3.6, INK.concrete, 3)
-    p.rect(16, 3.6, 18, 1.2, INK.concreteTop, 3)
-    p.rect(11, 3.8, 10, 1.2, INK.concreteTop, 3)
-    p.rect(0.5, GROUND - 1, 35, 1, isLight ? INK.concrete : TOWEL, 3)
-    p.oval(33.3, 16, 1.3, 1.3, INK.red, 2)
+    p.rect(36, 3, 1.6, GROUND - 3, INK.concrete, 3)
+    p.rect(18, 3, 19.6, 1.2, INK.concreteTop, 3)
+    p.rect(BRAUSE.left, 3.8, BRAUSE.right - BRAUSE.left, 1.2, INK.concreteTop, 3)
+    p.rect(0.5, GROUND - 1, 38, 1, isLight ? INK.concrete : TOWEL, 3)
+    p.oval(36.8, 16, 1.3, 1.3, INK.red, 2)
     const puff = isLight ? INK.concrete : '#FFFFFF'
     for (const [x, y, r] of STEAM_PUFFS.slice(0, Math.min(10, level))) {
       p.oval(x, y, r, r, withAlpha(puff, 0.1 + Math.min(10, level) * 0.03))
     }
     if (!isHere) {
       walkIn(() => {
-        p.shapes(clawdShapes('shower', step))
-        if (walked < 1) p.shapes([[5, 11.5, 6, 1.2, TOWEL], [5, 12.7, 2, 6, TOWEL]], 3)
+        p.shapes([...clawdShapes({ step }), ...LAPTOP])
+        if (walked < 1) p.shapes(TOWEL_SHAPES, 3)
       })
     } else {
-      p.shapes(clawdShapes('shower', 0, isOn || isBlinking(scene.idle)))
+      p.shapes([...clawdShapes(poseOf(scene)), ...laptopOf(poseOf(scene))])
       // Seifenblasen: je ein Pixel, beim Platzen nur noch ein Hauch.
       for (const { x, y, isPopping } of bubblesAt(scene.idle)) p.rect(x - 1, y - 1, 2, 2, withAlpha(isLight ? INK.glassEdge : '#FFFFFF', isPopping ? 0.3 : 0.8), 3)
     }
     if (isOn && water !== null) {
       if (water.drop !== null) {
-        for (const x of [13, 17, 21].filter((_, i) => i % 2 === tick % 2)) p.rect(x - 1, 6 + water.drop, 2, 2, wet, 3)
+        for (const x of [4.5, 31.5].filter((_, i) => i % 2 === tick % 2)) p.rect(x - 1, 7 + water.drop * 7, 2, 2, wet, 3)
       } else if (water.jet > 0) {
-        for (const x of [13, 17, 21]) p.rect(x - 0.6, 5 + (tick % 2), 1.2, 2, wet, 2)
-        for (let y = 12; y < GROUND - 1; y += 2) if ((y / 2 + tick) % 3 !== 0) for (const x of [6.5, 25.5]) p.rect(x - 0.6, y, 1.2, 2, wet, 2)
+        for (const x of [13, 17, 21]) p.rect(x - 0.6, 5, 1.2, 1, wet, 2)
+        for (let y = 6; y < GROUND - 1; y += 2) if ((y / 2 + tick) % 3 !== 0) for (const x of [4.5, 31.5]) p.rect(x - 0.6, y, 1.2, 2, wet, 2)
       }
-      // Eine Note steigt rechts auf.
-      p.rect(27 + (tick % 4) * 0.6, 9 - (tick % 4) * 1.6, 2, 2, INK.gold, 3)
     }
   }
 
@@ -853,18 +735,17 @@ export function sceneAlt(scene: Scene): string {
   const { role, water, arrival, level } = scene
   if (arrival >= 0) {
     const arriving: Record<Role, string> = {
-      tap: 'Clawd walking in, eyes on the phone',
-      shower: 'Clawd walking in with a towel',
+      tap: 'Clawd walking in with his laptop',
+      shower: 'Clawd walking in with his laptop and a towel',
     }
     return arriving[role]
   }
-  const isOn = water !== null
+  const isWorking = (poseOf(scene).typing ?? -1) >= 0
   if (role === 'tap') {
-    const where = ['next to the sink', 'on a stool', 'in a deck chair', 'in a deck chair under a parasol'][comfortOf(level)]
-    if (isOn) return `Clawd on the phone ${where}, the tap ${scene.strength >= 2 ? 'runs' : 'drips'} into the drain`
-    return `Clawd on the phone ${where}`
+    if (isWorking) return `Clawd typing fast on his laptop while the tap ${scene.strength >= 2 ? 'runs' : 'drips'} onto the floor`
+    return water !== null ? 'Clawd at his laptop, the tap drips onto the floor' : 'Clawd at his laptop next to the tap'
   }
   const steam = level >= 6 ? ' in thick steam' : ''
 
-  return isOn ? `Clawd singing in the shower${steam}` : `Clawd in a shower cap under the shower${steam}`
+  return isWorking ? `Clawd typing fast on his laptop under the running shower${steam}` : `Clawd with his laptop under the shower${steam}`
 }

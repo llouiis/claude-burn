@@ -240,6 +240,8 @@ const PALETTE = {
     railOpacity: '1',
     dotOpacity: '0.25',
     suggestion: '#B1B9F9',
+    // Die Liter: kräftiges Wasserblau, auf dunklem Grund rund 9:1 Kontrast.
+    water: '#7DC8FF',
     success: '#4EBA65',
     warning: '#FFC107',
     error: '#FF6B80',
@@ -252,6 +254,8 @@ const PALETTE = {
     railOpacity: '0.25',
     dotOpacity: '0.45',
     suggestion: '#5769F7',
+    // Auf hellem Grund rund 6:1 (suggestion dort nur 4,4:1).
+    water: '#0A5FB4',
     success: '#2C7A39',
     warning: '#966C1E',
     error: '#AB2B3F',
@@ -1993,10 +1997,11 @@ export const register: Register = on => {
         </Box>
       )
     }
-    // In den Apps stehen die Liter neben dem Becken, im Terminal zeichnet sie die Szene.
+    // In den Apps stehen die Liter neben Clawd, im Terminal zeichnet sie die Szene. Kräftig und
+    // halbfett, damit man sie auch in VS Code gut liest.
     const literPart =
       !isTerminal ? (
-        <Text key="liter" size="footnote" color="suggestion" tabular>
+        <Text key="liter" size="footnote" color={tapColors.water} weight="semibold" tabular>
           {nb(liters === '' ? '' : ` ${liters}`)}
         </Text>
       ) : null

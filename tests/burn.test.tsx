@@ -858,8 +858,9 @@ test('in the light theme the white things get a contour; the dark theme stays as
   }
   const shower = sceneSvg({ role: 'shower', water: null, strength: 0, tick: 0, level: 10, arrival: -1 }, light)
   expect(shower).not.toContain('fill="#FFFFFF" fill-opacity')
-  const sink = sceneSvg({ role: 'tap', water: null, strength: 0, tick: 0, level: 1, arrival: -1 }, light)
-  expect(sink).toMatch(/fill="#E6E4DD" stroke="#8D8B85"/)
+  // Am Hahn gibt es kein Becken mehr, nur die Pfütze in der Farbe des Wassers.
+  const tap = sceneSvg({ role: 'tap', water: null, strength: 0, tick: 0, level: 1, arrival: -1 }, light)
+  expect(tap).toMatch(/<ellipse cx="44" cy="[\d.]+" rx="4.5" ry="1" fill="#5769F7"/)
 })
 
 test('the steam leaves Clawds face free, the deck chair is smooth, arrivals fade in at the edge', () => {
@@ -894,10 +895,10 @@ test('Clawd arrives at the start and again after half an hour without replies; t
   await $.command.run({ command: 'clawd', args: 'wasserhahn' })
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
 
-  // Clawd läuft mit dem Handy von links heran, Becken und Hahn warten schon.
+  // Clawd läuft mit dem Handy von links heran, der Hahn wartet schon; noch keine Pfütze.
   await clock.advance(5 * 120)
   expect(await rowText(ui, 'clawd')).toMatch(/▐▛███▜▌▮/)
-  expect(await rowText(ui, 'beine')).toMatch(/╲▁╱/)
+  expect(await rowText(ui, 'beine')).not.toMatch(/▁/)
   await clock.advance(ARRIVAL)
   expect(await rowText(ui, 'clawd')).toMatch(/^▐▛███▜▌▮/)
 
@@ -934,10 +935,10 @@ test('both jobs arrive on foot: with the phone to the tap, with a towel to the s
   await clock.advance(5 * 120)
   expect(await tapText(ui)).toBe('       ━┓')
   expect(await rowText(ui, 'clawd')).toMatch(/▐▛███▜▌▮/)
-  expect(await rowText(ui, 'beine')).toMatch(/╲▁╱/)
+  expect(await rowText(ui, 'beine')).not.toMatch(/▁/)
   await clock.advance(ARRIVAL)
   expect(await tapText(ui)).toBe(TAP_HEAD)
-  expect(await rowText(ui, 'beine')).toMatch(/^ ▘▘ ▝▝ ╲▁╱/)
+  expect(await rowText(ui, 'beine')).toMatch(/^ ▘▘ ▝▝ /)
   await ui.unmount()
 
   // Zur Dusche mit dem Handtuch.
@@ -989,6 +990,40 @@ test('after a reply the water runs out instead of stopping: the jet thins, the l
   await ui.unmount()
 })
 
+test('the water runs as fast as the tokens come: more tokens per second, more frames', async ($, on) => {
+  engine(on)
+  const clock = mock.clock(on, { now: NOW })
+  const writes: Record<string, number> = {}
+  on('state.set', (_, e, next) => {
+    const key = (e as { key?: string }).key ?? ''
+    writes[key] = (writes[key] ?? 0) + 1
+
+    return next(e)
+  })
+
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.session.measure(measure)
+  await $.command.run({ command: 'clawd', args: 'hahn' })
+  await clock.advance(ARRIVAL)
+  // Bilder in 900 ms, solange eine Antwort mit so vielen Zeichen hereinkommt.
+  const framesFor = async (chars: number) => {
+    usages.push({ model: 'claude-opus-5-5', input_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1_000 })
+    const close = await openStream($, chars)
+    await clock.advance(10)
+    const before = writes.drip ?? 0
+    await clock.advance(900)
+    const frames = (writes.drip ?? 0) - before
+    await close()
+    await clock.advance(DRAIN)
+
+    return frames
+  }
+  const slow = await framesFor(400)
+  const fast = await framesFor(4_000)
+  expect(slow).toBeGreaterThan(0)
+  expect(fast).toBeGreaterThan(slow * 2)
+})
+
 test('while Clawd arrives the hidden water does not redraw the bar', async ($, on) => {
   engine(on)
   const clock = mock.clock(on, { now: NOW })
@@ -1018,7 +1053,7 @@ test('while Clawd arrives the hidden water does not redraw the bar', async ($, o
   await ui.unmount()
 })
 
-test('at the tap Clawd scrolls the phone while the water runs into the drain, and lounges more with every liter', async ($, on) => {
+test('at the tap Clawd scrolls the phone while the water runs onto the floor, and lounges more with every liter', async ($, on) => {
   engine(on)
   const clock = mock.clock(on, { now: NOW })
 
@@ -1027,27 +1062,27 @@ test('at the tap Clawd scrolls the phone while the water runs into the drain, an
   await cast($, clock, 'hahn')
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
 
-  // Hahn offen über dem Becken, Clawd mit Handy; noch kein Wasser, also keine Liter.
+  // Hahn offen, Clawd mit Handy; noch kein Wasser, also weder Pfütze noch Liter.
   expect(await tapText(ui)).toBe('       ┻┓')
   expect(await rowText(ui, 'clawd')).toMatch(/^▐▛███▜▌▮ +$/)
-  expect(await rowText(ui, 'beine')).toMatch(/^ ▘▘ ▝▝ ╲▁╱ +$/)
+  expect(await rowText(ui, 'beine')).toMatch(/^ ▘▘ ▝▝ +$/)
 
   // 1.000 ausgegebene Tokens sind 112,5 ml; die Eingabe zählt nicht.
   await step($, 300_000, 0, 1_000)
   await clock.advance(5_000)
-  expect(await rowText(ui, 'beine')).toMatch(/^ ▘▘ ▝▝ ╲▁╱ +≈ 113 ml$/)
+  expect(await rowText(ui, 'beine')).toMatch(/^ ▘▘ ▝▝ ▁▁▁ +≈ 113 ml$/)
 
   // Ab 1 L sitzt er auf dem Hocker.
   await step($, 0, 0, 10_000)
   await clock.advance(5_000)
-  expect(await rowText(ui, 'beine')).toMatch(/^ ╤═══╤ ╲▁╱ +≈ 1,2 L$/)
+  expect(await rowText(ui, 'beine')).toMatch(/^ ╤═══╤ ▁▁▁ +≈ 1,2 L$/)
 
   // Viel Tempo: der Strahl schießt in den Abfluss, dort strudelt es.
   usages.push({ model: 'claude-opus-5-5', input_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1_000 })
   const close = await openStream($)
   await clock.advance(10)
   expect(await rowText(ui, 'clawd')).toMatch(/^▐▛███▜▌▮[┃╏]/)
-  expect(await rowText(ui, 'beine')).toMatch(/╲[◌○]╱/)
+  expect(await rowText(ui, 'beine')).toMatch(/▁[◌○]▁/)
   await close()
   await clock.advance(DRAIN)
   // Danach tropft nichts nach: der Hahn ist still.
@@ -1058,7 +1093,7 @@ test('at the tap Clawd scrolls the phone while the water runs into the drain, an
   await clock.advance(5_000)
   expect(await tapText(ui)).toBe('▗▄▆█▆▄▖┻┓')
   expect(await rowText(ui, 'clawd')).toMatch(/^▐▛███▜▌▮   ▿/)
-  expect(await rowText(ui, 'beine')).toMatch(/^╲▚▚▚▚▚╱╲▁╱ +≈ 2\d,\d L$/)
+  expect(await rowText(ui, 'beine')).toMatch(/^╲▚▚▚▚▚╱▁▁▁ +≈ 2\d,\d L$/)
   await ui.unmount()
 
   const app = await $.ui.mount({ ...BAND, surface: 'desktop' })
@@ -1165,7 +1200,7 @@ test('idle, Clawd blinks; the tap leaks one drop per loop, in the shower soap bu
     const source = String((await svgOf(app))?.props.source)
     sources.add(source)
     if (source.includes('height="0.5" fill="#1F1E1D"')) blinks += 1
-    if (/<ellipse cx="47.2" cy="[\d.]+" rx="0.9" ry="1.2"/.test(source)) drops += 1
+    if (/<ellipse cx="44" cy="[\d.]+" rx="0.9" ry="1.2"/.test(source)) drops += 1
   }
   expect(sources.size).toBeGreaterThanOrEqual(8)
   expect(blinks).toBe(2)

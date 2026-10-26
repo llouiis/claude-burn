@@ -92,6 +92,12 @@ const TICK = 110
 // tröpfeln, tropfen, Strahl, starker Strahl. Die Szene wächst mit den Tokens der Sitzung.
 const TAP_WIDTH = SLOT
 const DRIP = 150
+// Das Wasser läuft im Tempo der Tokens pro Sekunde: bei 100 je Bild DRIP, bei 200 doppelt so
+// schnell, langsam höchstens halb, schnell höchstens dreifach. Der Takt prüft alle DRIP_STEP.
+const DRIP_STEP = 50
+const DRIP_PER_SECOND = 100
+const dripSpeed = (rate: number) => (rate <= 0 ? 1 : Math.max(0.5, Math.min(3, rate / DRIP_PER_SECOND)))
+let dripPhase = 0
 // Ab so vielen Tokens pro Sekunde (geschätzt wie der Spinner, über RATE_WINDOW) eine Stufe mehr.
 const FLOW_AT = [40, 100, 200]
 const RATE_WINDOW = 2_000
@@ -373,7 +379,7 @@ async function tap($: EngineInterface) {
     isDraining = false
     if (dripper !== undefined) return
     await setFlow($, flowFor(rateAt(at), -1, 0), at)
-    dripper = $.clock.every(DRIP, () => void flowTick($).catch(() => undefined))
+    dripper = $.clock.every(DRIP_STEP, () => void flowTick($).catch(() => undefined))
     return
   }
   rateSamples = []
@@ -443,6 +449,7 @@ function flowFor(rate: number, current: number, heldFor: number) {
 async function setFlow($: EngineInterface, next: number, at: number) {
   flowNow = next
   flowSince = at
+  dripPhase = 0
   await update($, flow, () => next)
   await update($, drip, () => 0)
 }
@@ -464,6 +471,9 @@ async function flowTick($: EngineInterface) {
     return
   }
   if (flowNow !== before) return
+  dripPhase += (DRIP_STEP / DRIP) * dripSpeed(rateAt(await $.clock.now()))
+  if (dripPhase < 1) return
+  dripPhase -= 1
   // Ausgelaufen: der letzte Tropfen ist aufgeschlagen.
   const tick = await read($, drip)
   if (isDraining && flowNow === 0 && (isRestingAt(tick) || isRestingAt(tick + 1))) {

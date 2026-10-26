@@ -2069,8 +2069,9 @@ export const register: Register = on => {
       }
       // Gestapelt steht Clawd klein, damit die Leiste flach bleibt; im ganz schmalen Panel
       // winzig, statt zu gehen (VS Code ist oft so schmal).
+      // Die Liter stehen gestapelt über dem Zähler neben Clawd und kosten keine Breite.
       const stacked = (step: AppStep): AppPlan | null =>
-        appLive(step) <= appRoom
+        appLive({ ...step, withLiters: step.withLiters && step.scale === 0 }) <= appRoom
           ? { detail: options.find(d => left(d) <= appRoom), ...step, hasTap: step.scale > 0, isStacked: true }
           : null
       // Eine Zeile nur mit Litern und Preis: lieber gestapelt mit allem als einzeilig mit Lücke.
@@ -2129,7 +2130,23 @@ export const register: Register = on => {
     // schneidet die Zeile am Rand ab, statt darüber hinaus zu zeichnen.
     // VS Code bricht Zeilen-Boxen sonst um (flex-wrap: wrap); die Leiste bleibt eine Zeile.
     const oneLine = isTextApp ? { flexWrap: 'nowrap' as const } : {}
-    const appRight = (plan: AppPlan) => [
+    const appRight = (plan: AppPlan) =>
+      plan.isStacked && plan.hasTap && plan.withLiters ? appStackedRight(plan) : appRowRight(plan)
+    // Gestapelt mit Clawd: rechts neben ihm die Liter über dem Zähler, beide rechtsbündig.
+    const appStackedRight = (plan: AppPlan) => [
+      <Box flexGrow={1} />,
+      <Box flexDirection="row" alignItems="center" flexShrink={0} {...oneLine}>
+        {tapPart(plan.scale)}
+      </Box>,
+      <Text>{nb('  ')}</Text>,
+      <Box flexDirection="column" alignItems="flex-end" flexShrink={0}>
+        {literPart}
+        <Box flexDirection="row" alignItems="center" flexShrink={0} {...oneLine}>
+          {appCounter(plan.withMoney)}
+        </Box>
+      </Box>,
+    ]
+    const appRowRight = (plan: AppPlan) => [
       <Box flexGrow={1} />,
       plan.hasTap && (
         <Box flexDirection="row" alignItems="center" flexShrink={0} {...oneLine}>

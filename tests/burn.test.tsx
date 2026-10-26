@@ -1073,15 +1073,16 @@ test('at the tap Clawd scrolls the phone while the water runs into the drain, an
 
 // Das Seitenpanel von VS Code ist selten breiter als 100 Zeichen: dort fielen die Liter früher
 // als Erstes weg und standen erst ab 106 Zeichen da (bis 0.17.2).
-test('in the apps the liters stay as long as Clawd has room, from 59 columns on', async ($, on) => {
+test('in the apps the liters stay as long as Clawd stands there, in VS Code from 47 columns on', async ($, on) => {
   engine(on)
   mock.clock(on, { now: NOW })
   await $.session.start({ cwd: '/', surface: 'vscode', isInteractive: true })
   await $.session.measure(measure)
   await step($, 0, 0, 10_000)
 
-  for (const surface of ['vscode', 'desktop'] as const) {
-    for (let bodyColumns = 59; bodyColumns <= 140; bodyColumns += 1) {
+  // Gestapelt stehen die Liter über dem Zähler neben Clawd und kosten keine Breite.
+  for (const [surface, from] of [['vscode', 47], ['desktop', 51]] as const) {
+    for (let bodyColumns = from; bodyColumns <= 140; bodyColumns += 1) {
       const ui = await $.ui.mount({ ...BAND, props: { ...BAND.props, bodyColumns }, surface })
       const liters = plain((await (ui as unknown as Drawing).find({ type: 'Text', text: /≈/ }))?.text)
       expect({ surface, bodyColumns, liters }).toEqual({ surface, bodyColumns, liters: ' ≈ 1,1 L' })

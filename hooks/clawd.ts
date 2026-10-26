@@ -410,6 +410,12 @@ const splashSvg = (x: number, y: number, colors: SceneColors) =>
 // über dem Abfluss. Aufgefangen wird nichts: das Wasser gurgelt weg, beim Strahl strudelt es.
 const SPOUT = { x: 47.2, y: 13.6 }
 const DRAIN = { x: 47, y: 20.4 }
+// Das Becken samt Hahn und Wasser steht kleiner als gezeichnet, damit Clawd neben ihm nicht
+// winzig wirkt: verkleinert zum Boden hin und etwas zu Clawd herüber, so bleibt es auf dem Boden.
+const SINK_SCALE = 0.7
+const SINK_FOOT = { x: 40, y: GROUND }
+const sinkGroup = (inner: string) =>
+  `<g transform="matrix(${SINK_SCALE} 0 0 ${SINK_SCALE} ${(SINK_FOOT.x * (1 - SINK_SCALE)).toFixed(2)} ${(SINK_FOOT.y * (1 - SINK_SCALE)).toFixed(2)})">${inner}</g>`
 // Auf hellem Grund eine graue Kontur um Weißes, sonst ginge es unter.
 const edgeOf = (colors: SceneColors, width = 0.45) => (colors.isLight === true ? ` stroke="${INK.concrete}" stroke-width="${width}"` : '')
 function sinkSvg(scene: Scene, colors: SceneColors, isOpen: boolean): string {
@@ -461,7 +467,7 @@ function sinkSvg(scene: Scene, colors: SceneColors, isOpen: boolean): string {
     }
   }
 
-  return sink + stream
+  return sinkGroup(sink + stream)
 }
 
 // Clawd am Hahn: das Handy in der vorderen Schere, der Blick gesenkt. `comfort` 0 steht er,
@@ -768,16 +774,18 @@ export function scenePixels(scene: Scene, colors: SceneColors): Pixels {
 
   if (role === 'tap') {
     // Das Becken auf dem Standfuß, der Hahn mit rotem Hebel.
-    p.rect(45, 21.5, 4, GROUND - 21.5, INK.concrete)
-    p.rect(51.5, 10, 2, 8, INK.concrete)
-    p.rect(46.4, 10, 7.1, 1.6, INK.concreteTop, 3)
-    p.rect(46.4, 11.6, 1.6, 2, INK.concreteTop, 3)
-    if (isTapOpen(arrival)) p.line(52.5, 10, 55.5, 7.3, 1.3, INK.red)
-    else p.line(52.5, 10, 56.5, 10, 1.3, INK.red)
-    p.rect(37, 18.6, 20, 2.4, white)
-    p.rect(39.5, 21, 15, 2, white)
-    p.rect(36.6, 17.8, 20.8, 1, isLight ? INK.concrete : INK.flourDark, 3)
-    fall(SPOUT.x, SPOUT.y, DRAIN.y)
+    p.within([SINK_SCALE, 0, 0, SINK_SCALE, SINK_FOOT.x * (1 - SINK_SCALE), SINK_FOOT.y * (1 - SINK_SCALE)], () => {
+      p.rect(45, 21.5, 4, GROUND - 21.5, INK.concrete)
+      p.rect(51.5, 10, 2, 8, INK.concrete)
+      p.rect(46.4, 10, 7.1, 1.6, INK.concreteTop, 3)
+      p.rect(46.4, 11.6, 1.6, 2, INK.concreteTop, 3)
+      if (isTapOpen(arrival)) p.line(52.5, 10, 55.5, 7.3, 1.3, INK.red)
+      else p.line(52.5, 10, 56.5, 10, 1.3, INK.red)
+      p.rect(37, 18.6, 20, 2.4, white)
+      p.rect(39.5, 21, 15, 2, white)
+      p.rect(36.6, 17.8, 20.8, 1, isLight ? INK.concrete : INK.flourDark, 3)
+      fall(SPOUT.x, SPOUT.y, DRAIN.y)
+    })
     const comfort = comfortOf(level)
     if (!isHere) {
       walkIn(() => p.shapes(idlerShapes(0, step)))

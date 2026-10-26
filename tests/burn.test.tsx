@@ -166,12 +166,37 @@ test('the bar cycles session, week and tokens, on every surface', async ($, on) 
 
   for (const surface of ['desktop', 'vscode', 'mobile'] as const) {
     const app = await $.ui.mount({ ...BAND, surface })
-    // In den Apps ein flacher Strich als Svg statt einer ganzen Zeile Blöcke.
-    expect((await app.find({ type: 'Svg' }))?.props).toMatchObject({ width: 64, height: 5 })
+    // In den Apps ein flacher Strich als Svg statt einer ganzen Zeile Blöcke; VS Code zeichnet
+    // keine Svg, dort ist der Strich aus Box.
+    if (surface === 'vscode') {
+      expect(await app.find({ type: 'Svg' })).toBeUndefined()
+      expect(JSON.stringify(await app.drawn())).toContain('"backgroundColor":"suggestion"')
+    } else {
+      expect((await app.find({ type: 'Svg' }))?.props).toMatchObject({ width: 64, height: 5 })
+    }
     expect(await app.find({ type: 'Text', text: /█/ })).toBeUndefined()
     expect(await app.find({ type: 'Text', text: /^✻\s(Session|Week|Context)/ })).toBeDefined()
     await app.unmount()
   }
+})
+
+test('a /compact counts its own tokens too, not only its price', async ($, on) => {
+  engine(on)
+  const clock = mock.clock(on, { now: NOW })
+  // Der Zusammenfasser ist ein eigener Modellaufruf, kein turn.step; der Preis kennt ihn schon.
+  const summary = [{ role: 'user' as const, text: 'Summary of the conversation so far', toolUses: [] }]
+  on('session.compact', () => ({
+    messages: summary,
+    usage: { input_tokens: 150_000, output_tokens: 2_000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+  }))
+
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.session.measure(measure)
+  await $.session.compact({ trigger: 'manual', messages: summary })
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await clock.advance(5_000)
+  expect(await liveText(ui)).toBe('$1.23 · 152.0k tokens · session ›')
+  await ui.unmount()
 })
 
 test('far right the live counter cycles session, 24h, 7d, 30d and all time', async ($, on) => {
@@ -379,10 +404,12 @@ test('Stats › Overview reads like /stats, on every surface', async ($, on) => 
     expect(await has(ui, /^Your input and output are ~67x the tokens in To Kill a Mockingbird$/)).toBe(true)
     expect(await has(ui, /^Most\sactive\shour:\s8pm–9pm$/)).toBe(true)
     expect(await has(ui, /^All\stime$/)).toBe(true)
-    if (surface === 'terminal') {
+    // VS Code zeichnet keine Svg (siehe register.tsx): dort die Heatmap als Text.
+    if (surface === 'terminal' || surface === 'vscode') {
       expect(await has(ui, /^Mon\s/)).toBe(true)
       expect(await has(ui, /Oct/)).toBe(true)
       expect(await has(ui, /^\s+Less\s░\s▒\s▓\s█\sMore$/)).toBe(true)
+      expect(await ui.find({ type: 'Svg' })).toBeUndefined()
     } else {
       expect(await ui.find({ type: 'Svg' })).toBeDefined()
     }
@@ -920,7 +947,7 @@ test('every job arrives its own way: on foot with phone, towel or hose, by rowbo
   await clock.advance(5 * 120)
   expect(await rowText(towel, 'clawd')).toMatch(/▐▛███▜▌▬/)
   await towel.unmount()
-  const app = await $.ui.mount({ ...BAND, surface: 'vscode' })
+  const app = await $.ui.mount({ ...BAND, surface: 'desktop' })
   expect((await svgOf(app))?.props.alt).toBe('Clawd walking in with a towel')
   await app.unmount()
 })
@@ -954,7 +981,7 @@ test('the more tokens per second stream in, the further the hose sprays', async 
 
   // In den Apps derselbe Strahl als gestrichelter Bogen.
   usages.push({ model: 'claude-opus-5-5', input_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 300 })
-  const app = await $.ui.mount({ ...BAND, surface: 'vscode' })
+  const app = await $.ui.mount({ ...BAND, surface: 'desktop' })
   const middle = await openStream($, 1_200)
   await clock.advance(10)
   const hose = await svgOf(app)
@@ -1039,7 +1066,7 @@ test('the rowboat brakes into its stop and pulls away slowly, the oar rests whil
 
   // In den Apps dieselbe Kurve; im Halt ruht das Ruder, während Clawd aussteigt.
   await $.command.run({ command: 'clawd', args: 'see' })
-  const app = await $.ui.mount({ ...BAND, surface: 'vscode' })
+  const app = await $.ui.mount({ ...BAND, surface: 'desktop' })
   const svg = async () => String((await svgOf(app))?.props.source)
   const xs: number[] = []
   for (let i = 1; i <= 9; i += 1) {
@@ -1111,7 +1138,7 @@ test('the pool fills with the session tokens, a duck swims in it and at the end 
   expect(await puddleText(ui)).toBe('███████◗██▏▁▁')
   await ui.unmount()
 
-  const app = await $.ui.mount({ ...BAND, surface: 'vscode' })
+  const app = await $.ui.mount({ ...BAND, surface: 'desktop' })
   expect((await svgOf(app))?.props.alt).toBe('Clawd in sunglasses next to the overflowing pool')
   await app.unmount()
 
@@ -1165,7 +1192,7 @@ test('at the tap Clawd scrolls the phone while the water runs into the drain, an
   expect(await rowText(ui, 'beine')).toMatch(/^╲▚▚▚▚▚╱╲▁╱ +≈ 2\d,\d L$/)
   await ui.unmount()
 
-  const app = await $.ui.mount({ ...BAND, surface: 'vscode' })
+  const app = await $.ui.mount({ ...BAND, surface: 'desktop' })
   const svg = await svgOf(app)
   expect(svg?.props.alt).toBe('Clawd on the phone in a deck chair under a parasol')
   // Das Display leuchtet, der Hebel am Hahn ist rot; die Liter stehen neben dem Becken.
@@ -1210,7 +1237,7 @@ test('in the endless shower Clawd sings while the water runs, and the steam thic
   const close = await openStream($)
   await clock.advance(10)
   expect(await rowText(ui, 'clawd')).toMatch(/^▐▛███▜▌[┃╏]┃.?[♪♫]/)
-  const app = await $.ui.mount({ ...BAND, surface: 'vscode' })
+  const app = await $.ui.mount({ ...BAND, surface: 'desktop' })
   expect((await svgOf(app))?.props.alt).toBe('Clawd singing in the shower')
   await app.unmount()
   await close()
@@ -1224,7 +1251,7 @@ test('in the endless shower Clawd sings while the water runs, and the steam thic
   expect(await sprayText(ui)).toMatch(/^[░▒]{4}$/)
   await ui.unmount()
 
-  const steamy = await $.ui.mount({ ...BAND, surface: 'vscode' })
+  const steamy = await $.ui.mount({ ...BAND, surface: 'desktop' })
   expect((await svgOf(steamy))?.props.alt).toBe('Clawd in a shower cap under the shower in thick steam')
   // Rosa Duschhaube.
   expect(String((await svgOf(steamy))?.props.source)).toContain('#F2A7C3')
@@ -1265,7 +1292,7 @@ test('in the bathtub the foam piles up with the session, and at the end it spill
   expect(await puddleText(ui)).toMatch(/^▁▂+▁$/)
   await ui.unmount()
 
-  const app = await $.ui.mount({ ...BAND, surface: 'vscode' })
+  const app = await $.ui.mount({ ...BAND, surface: 'desktop' })
   expect((await svgOf(app))?.props.alt).toBe('Clawd in the overflowing bathtub')
   await app.unmount()
 })
@@ -1300,7 +1327,7 @@ test('Clawd slurps the lake through a straw: bubbles with the tempo, the lake dr
   expect(await puddleText(ui)).toBe('▁┃▁▁ˇ▁▁ˇ▁><>▁')
   await ui.unmount()
 
-  const app = await $.ui.mount({ ...BAND, surface: 'vscode' })
+  const app = await $.ui.mount({ ...BAND, surface: 'desktop' })
   expect((await svgOf(app))?.props.alt).toBe('Clawd with a straw at the dried-up lake')
   await app.unmount()
 })
@@ -1374,7 +1401,7 @@ test('in the apps Clawd is a pixel Svg: he walks in with the hose, then stands a
   await $.session.start({ cwd: '/', surface: 'vscode', isInteractive: true })
   await $.session.measure(measure)
   await $.command.run({ command: 'clawd', args: 'pool' })
-  const app = await $.ui.mount({ ...BAND, surface: 'vscode' })
+  const app = await $.ui.mount({ ...BAND, surface: 'desktop' })
   const walking = await svgOf(app)
   expect(walking?.props.alt).toBe('Clawd walking in with a garden hose')
   expect(String(walking?.props.source)).toContain('translate(')

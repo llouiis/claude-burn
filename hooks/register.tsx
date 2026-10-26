@@ -1,6 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type {
   EngineInterface,
+  ModelUsage,
   Register,
   SessionContextUsage,
   SessionCost,
@@ -13,7 +14,6 @@ import { PREFIX, SPANS, START_KEY, addTo, allOutput, costFrom, liveTotals } from
 import type { Ledger } from './ledger'
 import type { Series } from './chart'
 import {
-  APP_SCENE,
   appScene,
   FLOWS,
   RESTING,
@@ -107,8 +107,15 @@ const TAP_MIN_COLUMNS = 80
 // misst in px. Mit 7 px gerechnet: lieber eine Zelle zu viel als eine umbrochene Leiste.
 const APP_CELL_PX = 7
 const appCells = (px: number) => Math.ceil(px / APP_CELL_PX)
-// Text in footnote ist dort proportional und schmaler als eine Zelle der Code-Schrift.
-const appText = (chars: number) => Math.ceil(chars * 0.85)
+// Text in footnote ist dort proportional und meist schmaler als eine Zelle der Code-Schrift,
+// die Ziffern (tabular) aber fast so breit wie eine. Die Leiste ist voll davon: mit 0,95 gerechnet.
+const APP_TEXT_CELL = 0.9
+const appText = (chars: number) => Math.ceil(chars * APP_TEXT_CELL)
+// Was die Apps selbst dazugeben und keine Schätzung sieht: der Innenabstand der Buttons und
+// `xs` zwischen zweien in einer Zeile. So viele Zellen bleiben in der Leiste frei.
+const APP_SLACK = 3
+// Ohne Svg (VS Code) steht die Szene als Text: rechts neben Clawds neun Spalten so viele.
+const APP_TEXT_REACH = 14
 const drip = atom({ plugin: 'burn', key: 'drip' } as const, 0)
 // -1 zugedreht, sonst die Stufe wie flowNow; Wasser zeigt die Szene nur, solange es läuft.
 const flow = atom({ plugin: 'burn', key: 'flow' } as const, -1)
@@ -673,6 +680,35 @@ async function saveTally($: EngineInterface) {
   await $.store.set(tallyKey, { tokens: await read($, tokens), costBase })
 }
 
+// Zählt einen fertigen Modellaufruf: Summe der Sitzung, Kassenbuch, Ausgabe für die Liter.
+// `withdrawn` ist die Schätzung, die er beim Streamen schon gezeigt hat.
+async function countUsage($: EngineInterface, used: ModelUsage, withdrawn: number) {
+  await update($, tokens, totals => ({
+    input: totals.input + used.input_tokens,
+    output: totals.output + used.output_tokens,
+    cacheRead: totals.cacheRead + used.cache_read_input_tokens,
+    cacheWrite: totals.cacheWrite + used.cache_creation_input_tokens,
+  }))
+  await saveTally($)
+  const amount =
+    used.input_tokens + used.output_tokens + used.cache_read_input_tokens + used.cache_creation_input_tokens
+  const at = await $.clock.now()
+  // Der Rückstand wächst um die Antwort, die Summe gleich danach auch: bis beides
+  // geschrieben ist, zeigt die Leiste den alten Stand statt kurz zu wenig.
+  isSettling = true
+  grow($, amount + withdrawn)
+  ownLedger = addTo(ownLedger, at, amount, at)
+  ownOut = addTo(ownOut, at, used.output_tokens, at)
+  try {
+    await $.store.set(LEDGER_KEY, ownLedger)
+    await $.store.set(OUT_KEY, ownOut)
+    await track($, at)
+    await refreshLive($).catch(() => undefined)
+  } finally {
+    isSettling = false
+  }
+}
+
 async function refreshLive($: EngineInterface) {
   const ledgers = await ledgersOf($, PREFIX, LEDGER_KEY, ownLedger)
   const costs = await ledgersOf($, COST_PREFIX, COST_KEY, ownCost)
@@ -833,45 +869,29 @@ export const register: Register = on => {
       grow($, withdrawn)
       await publish($)
     }
-    if (used !== null) {
-      await update($, tokens, totals => ({
-        input: totals.input + used.input_tokens,
-        output: totals.output + used.output_tokens,
-        cacheRead: totals.cacheRead + used.cache_read_input_tokens,
-        cacheWrite: totals.cacheWrite + used.cache_creation_input_tokens,
-      }))
-      await saveTally($)
-      const amount =
-        used.input_tokens +
-        used.output_tokens +
-        used.cache_read_input_tokens +
-        used.cache_creation_input_tokens
-      const at = await $.clock.now()
-      // Der Rückstand wächst um die Antwort, die Summe gleich danach auch: bis beides
-      // geschrieben ist, zeigt die Leiste den alten Stand statt kurz zu wenig.
-      isSettling = true
-      grow($, amount + withdrawn)
-      ownLedger = addTo(ownLedger, at, amount, at)
-      ownOut = addTo(ownOut, at, used.output_tokens, at)
-      try {
-        await $.store.set(LEDGER_KEY, ownLedger)
-        await $.store.set(OUT_KEY, ownOut)
-        await track($, at)
-        await refreshLive($).catch(() => undefined)
-      } finally {
-        isSettling = false
-      }
-    }
+    if (used !== null) await countUsage($, used, withdrawn)
 
     return response
+  })
+
+  // Auch das Kompaktieren ist ein Modellaufruf, aber kein turn.step: der Preis
+  // (session.measure) enthält ihn schon, die Tokens sonst nicht. Ohne das stand nach
+  // einem /compact etwa „$0.32 · 0 tokens“.
+  on('session.compact', async ($, e, next) => {
+    const result = await next(e)
+    if (result.skip === undefined && result.usage !== undefined) await countUsage($, result.usage, 0)
+
+    return result
   })
 
   // Das Fenster: Usage und Stats wie /usage, Zeile für Zeile.
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const elements = $.ui.resolve(e)
     const { Box, Button, Text } = elements
-    const Svg = 'Svg' in elements ? elements.Svg : undefined
-    const isApp = e.surface !== 'terminal' && Svg !== undefined
+    // VS Code rastert jedes Svg in einem eigenen iframe, das hier nicht zeichnet: dann bliebe
+    // nur der alt-Text. Dort also Balken aus Box und Heatmap und Diagramm als Text.
+    const isApp = e.surface !== 'terminal' && 'Svg' in elements
+    const Svg = e.surface !== 'vscode' && 'Svg' in elements ? elements.Svg : undefined
     const columns = e.props.bodyColumns
     const blank = <Text>{' '}</Text>
     const currentTab = (await read($, tab)) % 4
@@ -1309,7 +1329,7 @@ export const register: Register = on => {
     if (currentTab === 1) {
       // In den Apps ist eine Woche 9 px breit, eine Zelle nur rund 7: dort nach px gerechnet,
       // sonst ragt das Svg im schmalen Fenster (vscode) über den Rand.
-      const weeks = Math.max(8, Math.min(52, isApp ? Math.floor((columns * APP_CELL_PX - 26) / 9) : columns - 4))
+      const weeks = Math.max(8, Math.min(52, Svg !== undefined ? Math.floor((columns * APP_CELL_PX - 26) / 9) : columns - 4))
       const map = heatmap(cache, today, weeks)
 
       let chart: ReturnType<typeof h>
@@ -1572,8 +1592,12 @@ export const register: Register = on => {
 
     const elements = $.ui.resolve(e)
     const { Box, Button, Text } = elements
-    const Svg = 'Svg' in elements ? elements.Svg : undefined
+    // VS Code rastert jedes Svg in einem eigenen iframe, das hier nicht zeichnet (es meldet sich
+    // nicht rechtzeitig, dann steht der alt-Text da). Dort ist der Balken eine Box und Clawd
+    // Text wie im Terminal; die Desktop-App behält ihre Svg.
+    const Svg = e.surface !== 'vscode' && 'Svg' in elements ? elements.Svg : undefined
     const isTerminal = e.surface === 'terminal'
+    const isTextApp = !isTerminal && Svg === undefined
     const nowMs = (await read($, now)) || (await $.clock.now())
 
     // Ganz rechts: Tokens live, ein Klick wechselt Session, 24h, 7d, 30d, Gesamt.
@@ -1634,17 +1658,36 @@ export const register: Register = on => {
       (liveMoney === '' ? 0 : liveMoney.length + ' · '.length) + liveArrow.length + liveValue.length + liveRest.length
     const reach = 1 + liveWidth
     const lane = arrivalAt < 0 ? 0 : Math.max(0, Math.min(24, e.props.bodyColumns - 6 - TAP_WIDTH - reach))
-    const drawn = isTerminal ? terminalScene(scene, lane, reach) : null
-    // In den Apps 1,5-fach oder, wenn es eng wird, 1-fach (siehe appPlan).
-    const tapPart = (size: { width: number; height: number } = APP_SCENE) => !isTerminal && Svg !== undefined ? (
-      <Svg
-        key="hahn"
-        alt={sceneAlt(scene)}
-        width={size.width}
-        height={size.height}
-        source={sceneSvg(scene, tapColors)}
-      />
-    ) : (
+    // Als Text in den Apps: die drei Zeilen des Terminals als Block, rechts so breit wie die
+    // breiteste Szene (der volle Pool); die Liter stehen daneben wie beim Svg.
+    const drawn = isTerminal
+      ? terminalScene(scene, lane, reach)
+      : isTextApp
+        ? terminalScene({ ...scene, liters: '' }, 0, APP_TEXT_REACH)
+        : null
+    // In den Apps 1,5-fach oder, wenn es eng wird, 1-fach (siehe appPlan); als Text der Block
+    // aus drei Zeilen oder nur Clawds eine Zeile.
+    const tapPart = (scale = 1.5) =>
+      !isTerminal && Svg !== undefined ? (
+        <Svg
+          key="hahn"
+          alt={sceneAlt(scene)}
+          width={appScene(scale).width}
+          height={appScene(scale).height}
+          source={sceneSvg(scene, tapColors)}
+        />
+      ) : isTextApp && drawn !== null && scale > 1 ? (
+        <Box key="hahn" flexDirection="column">
+          <Text size="footnote" mono>
+            {pieces([...drawn.head, { text: ' '.repeat(APP_TEXT_REACH) }])}
+          </Text>
+          {drawn.rows.map(row => (
+            <Text size="footnote" mono>
+              {pieces([...row.slot, ...row.right])}
+            </Text>
+          ))}
+        </Box>
+      ) : (
       // Mit drei Zeilen steht hier der Kopf, sonst Clawd selbst.
       <Box key="hahn">
         <Text size="footnote" mono>
@@ -1718,7 +1761,7 @@ export const register: Register = on => {
 
     // Die Apps, desktop und vscode gleich und nur nach der Breite, in einer Zeile:
     // erst kürzen sich die Details, dann gehen die Liter, dann wird Clawd kleiner (1,5-fach
-    // 13 Zellen, 1-fach 9), dann geht der Preis. Passt er auch 1-fach nicht in die Zeile,
+    // 13 Zellen, 1-fach 9; als Text in VS Code der Block 23, die eine Zeile 9), dann geht der Preis. Passt er auch 1-fach nicht in die Zeile,
     // rückt der Zähler mit ihm unter die Limits; erst wenn selbst das nicht passt, tritt er
     // beiseite. Jede Stufe passt auch bei jeder größeren Breite, und es gilt die erste, die
     // passt: so zeigt ein breiteres Fenster Clawd nie kleiner als ein schmaleres.
@@ -1741,10 +1784,16 @@ export const register: Register = on => {
       { scale: 0, withMoney: false, withLiters: false },
     ] as const
     type AppStep = (typeof APP_STEPS)[number]
-    const appRoom = e.props.bodyColumns - 1
+    const appRoom = e.props.bodyColumns - 1 - APP_SLACK
     const appLive = (step: AppStep) =>
       appText((step.scale > 0 ? 3 : 2) + liveRoomOf(step.withMoney) + (step.withLiters ? LITER_WIDTH : 0)) +
-      (step.scale > 0 ? appCells(appScene(step.scale).width) : 0)
+      (step.scale === 0
+        ? 0
+        : isTextApp
+          ? step.scale > 1
+            ? SLOT + APP_TEXT_REACH
+            : SLOT
+          : appCells(appScene(step.scale).width))
     const appPlan = (left: (detail: string | undefined) => number, details: string[]): AppPlan => {
       const options = [...details, undefined]
       const inRow = (step: AppStep): AppPlan | null => {
@@ -1779,8 +1828,10 @@ export const register: Register = on => {
     }
     // Rechts der Zähler als Text; nur der Zeitraum ist der Knopf, denn die Apps zeichnen
     // jeden Button als ihren eigenen Knopf. Farben stehen außerhalb davon (siehe unten).
+    // Der Text kürzt sein Ende, statt umzubrechen (die festen Leerzeichen ließen ihn sonst
+    // über den Rand laufen); schrumpfen darf er nicht, das tun erst die Details links.
     const appCounter = (withMoney: boolean) => [
-      <Text size="footnote" tabular>
+      <Text size="footnote" tabular wrap="truncate-end">
         {liveMoney !== '' && withMoney && <Text color="claude">{liveMoney}</Text>}
         {liveMoney !== '' && withMoney && <Text dimColor>{nb(' · ')}</Text>}
         {liveArrow !== '' && <Text dimColor>{nb(liveArrow)}</Text>}
@@ -1801,28 +1852,33 @@ export const register: Register = on => {
       </Button>,
     ]
     // Eine ruhige Zeile: links die Limits, rechts Clawd (höher als der Text), Liter, Zähler;
-    // alles mittig, so steht der Text auf halber Höhe neben ihm.
+    // alles mittig, so steht der Text auf halber Höhe neben ihm. Rechts schrumpft nichts:
+    // Clawd würde gestaucht, der Zähler zerrissen. Liegt die Schätzung daneben, gibt die
+    // Lücke nach, dann kürzen sich links die Details; was dann noch übersteht,
+    // schneidet die Zeile am Rand ab, statt darüber hinaus zu zeichnen.
     const appRight = (plan: AppPlan) => [
       <Box flexGrow={1} />,
       plan.hasTap && (
-        <Box flexDirection="row" alignItems="center">
-          {tapPart(appScene(plan.scale))}
+        <Box flexDirection="row" alignItems="center" flexShrink={0}>
+          {tapPart(plan.scale)}
           {plan.withLiters && literPart}
         </Box>
       ),
       <Text>{nb(plan.hasTap ? '  ' : '   ')}</Text>,
-      ...appCounter(plan.withMoney),
+      <Box flexDirection="row" alignItems="center" flexShrink={0}>
+        {appCounter(plan.withMoney)}
+      </Box>,
     ]
     const appBand = (plan: AppPlan, left: ReturnType<typeof h>) =>
       plan.isStacked ? (
-        <Box flexDirection="column">
+        <Box flexDirection="column" overflow="hidden">
           {left}
-          <Box flexDirection="row" alignItems="center">
+          <Box flexDirection="row" alignItems="center" overflow="hidden">
             {appRight(plan)}
           </Box>
         </Box>
       ) : (
-        <Box flexDirection="row" alignItems="center">
+        <Box flexDirection="row" alignItems="center" overflow="hidden">
           {left}
           {appRight(plan)}
         </Box>
@@ -1836,7 +1892,8 @@ export const register: Register = on => {
 
       return appBand(
         plan,
-        <Box flexDirection="row" alignItems="center" flexShrink={1}>
+        // minWidth 0: sonst hielte der Text links seine volle Breite, statt sein Ende zu kürzen.
+        <Box flexDirection="row" alignItems="center" flexShrink={1} minWidth={0}>
           <Text size="footnote" wrap="truncate-end">
             <Text color="claude">{nb(MARK)}</Text>
             <Text dimColor>{nb(plan.detail ?? '')}</Text>
@@ -1880,7 +1937,7 @@ export const register: Register = on => {
       : appPlan(
           text =>
             appText(fixed - barCells - (text === undefined ? separator.length : 0) + (text?.length ?? 0)) +
-            (shown.percent === null ? 0 : appCells(APP_BAR.width)),
+            (shown.percent === null ? 0 : Svg !== undefined ? appCells(APP_BAR.width) : BAR_WIDTH),
           shown.details,
         )
     const detail = plan === null ? termDetail : plan.detail
@@ -1933,8 +1990,10 @@ export const register: Register = on => {
         <Text>{nb(gap)}</Text>
       </Text>
     ) : (
-      <Box flexDirection="row" alignItems="center">
-        <Text size="footnote">
+      // Schrumpft als Erstes, wenn die Schätzung zu knapp war; minWidth 0, sonst hielte jeder
+      // Text seine volle Breite, und das Kürzen unten griffe nie.
+      <Box flexDirection="row" alignItems="center" flexShrink={1} minWidth={0}>
+        <Text size="footnote" wrap="truncate-end">
           <Text color="claude">{nb(MARK)}</Text>
           <Text>{nb(label)}</Text>
         </Text>
@@ -1948,7 +2007,7 @@ export const register: Register = on => {
               source={appBar(shown.percent, shown.isStale, colors)}
             />
           ) : (
-            <Box flexDirection="row" width={BAR_WIDTH} height={1}>
+            <Box flexDirection="row" width={BAR_WIDTH} height={1} flexShrink={0}>
               {filled > 0 && <Box width={filled} height={1} backgroundColor={color ?? 'inactive'} />}
               {filled < BAR_WIDTH && <Box width={BAR_WIDTH - filled} height={1} backgroundColor="subtle" />}
             </Box>
@@ -1962,12 +2021,15 @@ export const register: Register = on => {
       </Box>
     )
 
+    // Die Knöpfe kürzen sich nie: ein halber Knopf wäre keiner. Es kürzen sich die Limits davor.
     if (plan !== null) {
       return appBand(
         plan,
-        <Box flexDirection="row" alignItems="center" flexShrink={1}>
+        <Box flexDirection="row" alignItems="center" flexShrink={1} minWidth={0}>
           {limits}
-          {controls}
+          <Box flexDirection="row" alignItems="center" flexShrink={0}>
+            {controls}
+          </Box>
         </Box>,
       )
     }

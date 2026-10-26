@@ -140,7 +140,7 @@ const textScale = async (ui: Drawn) => {
 
   const height = box.children?.[0]?.props?.height
 
-  return height === 0.22 ? 2 : height === 0.165 ? 1.5 : 1
+  return height === 0.22 ? 2 : height === 0.165 ? 1.5 : Math.round((Number(height) / 0.11) * 10) / 10
 }
 // Alle Knoten eines Baums, die Wurzel zuerst.
 const nodesOf = (tree: Tree): Tree[] => [tree, ...(tree.children ?? []).filter(k => typeof k === 'object' && k !== null).flatMap(nodesOf)]
@@ -207,11 +207,18 @@ test('in VS Code the bar draws no Svg: the bar is a Box, Clawd is Box pixels, an
     expect({ bodyColumns, small: all.length <= 300 }).toEqual({ bodyColumns, small: true })
     const scale = await textScale(ui)
     const isRow = drawn.props?.flexDirection !== 'column'
-    // Ab 47 Spalten gestapelt mit winzigen Pixeln, ab 52 mit kleinen, ab ROW_FROM in einer Zeile,
-    // ab LARGE_FROM große.
+    // Ab 47 Spalten gestapelt mit winzigen Pixeln, je Spalte ein Zehntel größer, ab 52 mit
+    // kleinen, ab ROW_FROM in einer Zeile, ab LARGE_FROM große.
     expect({ bodyColumns, scale, isRow }).toEqual({
       bodyColumns,
-      scale: bodyColumns >= LARGE_FROM ? 2 : bodyColumns >= 52 ? 1.5 : bodyColumns >= 47 ? 1 : 0,
+      scale:
+        bodyColumns >= LARGE_FROM
+          ? 2
+          : bodyColumns >= 52
+            ? 1.5
+            : bodyColumns >= 47
+              ? Math.round((1 + (bodyColumns - 47) / 10) * 10) / 10
+              : 0,
       isRow: bodyColumns >= ROW_FROM,
     })
     expect({ bodyColumns, grows: scale >= last.scale && (isRow || !last.isRow) }).toEqual({ bodyColumns, grows: true })

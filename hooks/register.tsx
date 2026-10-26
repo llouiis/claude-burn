@@ -129,7 +129,18 @@ const APP_PIXEL = {
   small: { width: 0.37, height: 0.165 },
   tiny: { width: 0.245, height: 0.11 },
 }
-const pixelSize = (scale: number) => (scale > APP_SMALL ? APP_PIXEL.large : scale > APP_TINY ? APP_PIXEL.small : APP_PIXEL.tiny)
+// Zwischen 1- und 1,5-fach (nur im schmalen Panel) wachsen die winzigen Pixel mit.
+const pixelSize = (scale: number) =>
+  scale > APP_SMALL
+    ? APP_PIXEL.large
+    : scale === APP_SMALL
+      ? APP_PIXEL.small
+      : {
+          width: Math.round(APP_PIXEL.tiny.width * scale * 1000) / 1000,
+          height: Math.round(APP_PIXEL.tiny.height * scale * 1000) / 1000,
+        }
+// Im schmalen Panel steht Clawd so groß, wie es passt, in Zehnteln von knapp 1,5- bis 1-fach.
+const APP_TINY_SCALES = [1.4, 1.3, 1.2, 1.1, APP_TINY]
 const APP_CH_PX = 8.2
 const drip = atom({ plugin: 'burn', key: 'drip' } as const, 0)
 // -1 zugedreht, sonst die Stufe wie flowNow; Wasser zeigt die Szene nur, solange es läuft.
@@ -2031,10 +2042,12 @@ export const register: Register = on => {
       { scale: APP_SMALL, withMoney: false, withLiters: true },
       { scale: APP_SMALL, withMoney: true, withLiters: false },
       { scale: APP_SMALL, withMoney: false, withLiters: false },
-      { scale: APP_TINY, withMoney: true, withLiters: true },
-      { scale: APP_TINY, withMoney: false, withLiters: true },
-      { scale: APP_TINY, withMoney: true, withLiters: false },
-      { scale: APP_TINY, withMoney: false, withLiters: false },
+      ...APP_TINY_SCALES.flatMap(scale => [
+        { scale, withMoney: true, withLiters: true },
+        { scale, withMoney: false, withLiters: true },
+        { scale, withMoney: true, withLiters: false },
+        { scale, withMoney: false, withLiters: false },
+      ]),
       { scale: 0, withMoney: true, withLiters: false },
       { scale: 0, withMoney: false, withLiters: false },
     ] as const
@@ -2066,9 +2079,9 @@ export const register: Register = on => {
       const isWhole = (step: AppStep) => step.withLiters && step.withMoney
       // Winzig steht er nur gestapelt: in einer Zeile wäre er neben dem Text zu klein.
       const plans = [
-        ...withTap.filter(step => isWhole(step) && step.scale > APP_TINY).map(inRow),
+        ...withTap.filter(step => isWhole(step) && step.scale >= APP_SMALL).map(inRow),
         ...withTap.filter(step => step.scale < APP_LARGE).map(stacked),
-        ...withTap.filter(step => !isWhole(step) && step.scale > APP_TINY).map(inRow),
+        ...withTap.filter(step => !isWhole(step) && step.scale >= APP_SMALL).map(inRow),
         ...without.map(inRow),
         ...without.map(stacked),
       ]

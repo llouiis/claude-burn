@@ -5,8 +5,8 @@ import { axisLabel } from '../hooks/chart'
 import { FLOWS, ML_PER_TOKEN, ROLES, literText, piecesText, sceneAlt, sceneSvg, tapLevel, terminalScene } from '../hooks/clawd'
 import type { Scene } from '../hooks/clawd'
 import { addTo, allOutput, costFrom, liveTotals } from '../hooks/ledger'
-import { modelName } from '../hooks/stats'
-import type { StatsCache } from '../hooks/stats'
+import { addToBook, dayNumber, modelName, summarize, withBooks } from '../hooks/stats'
+import type { DayBook, StatsCache } from '../hooks/stats'
 
 const BAND = {
   plugin: 'burn',
@@ -195,7 +195,7 @@ test('a /compact counts its own tokens too, not only its price', async ($, on) =
   await $.session.compact({ trigger: 'manual', messages: summary })
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   await clock.advance(5_000)
-  expect(await liveText(ui)).toBe('$1.23 · 152.0k tokens · session ›')
+  expect(await liveText(ui)).toBe('$1.23 · 152.000 tokens · session ›')
   await ui.unmount()
 })
 
@@ -213,18 +213,18 @@ test('far right the live counter cycles session, 24h, 7d, 30d and all time', asy
 
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   // Gleich danach läuft der Zähler noch hinterher wie im Spinner, dann holt er auf.
-  expect(await liveText(ui)).not.toBe('$3.50 · 1.245m tokens · session ›')
+  expect(await liveText(ui)).not.toBe('$3.50 · 1.245.100 tokens · session ›')
   await clock.advance(5_000)
-  expect(await liveText(ui)).toBe('$3.50 · 1.245m tokens · session ›')
+  expect(await liveText(ui)).toBe('$3.50 · 1.245.100 tokens · session ›')
   // Am ersten Tag: Preis bei session und 24h, nicht bei 7d, 30d und all time.
   await ui.press({ key: 'live' })
-  expect(await liveText(ui)).toBe('$3.50 · 1.245m tokens · 24h ›')
+  expect(await liveText(ui)).toBe('$3.50 · 1.245.100 tokens · 24h ›')
   for (const span of ['7d', '30d', 'all time']) {
     await ui.press({ key: 'live' })
-    expect(await liveText(ui)).toBe(`1.245m tokens · ${span} ›`)
+    expect(await liveText(ui)).toBe(`1.245.100 tokens · ${span} ›`)
   }
   await ui.press({ key: 'live' })
-  expect(await liveText(ui)).toBe('$3.50 · 1.245m tokens · session ›')
+  expect(await liveText(ui)).toBe('$3.50 · 1.245.100 tokens · session ›')
   await ui.unmount()
 })
 
@@ -504,11 +504,36 @@ test('session tokens count live after every model call, before the turn ends', a
 
   await step($, 500, 10_000, 1_500)
   await clock.advance(5_000)
-  expect(await liveText(ui)).toBe('$1.23 · 12.0k tokens · session ›')
+  expect(await liveText(ui)).toBe('$1.23 · 12.000 tokens · session ›')
   await step($, 500, 20_000, 2_000)
   await clock.advance(5_000)
-  expect(await liveText(ui)).toBe('$1.23 · 34.5k tokens · session ›')
+  expect(await liveText(ui)).toBe('$1.23 · 34.500 tokens · session ›')
   await ui.unmount()
+})
+
+test('/tokenstats counts on after the last day /stats computed: own day books, tokens from the hour book', () => {
+  const opus = { inputTokens: 10, outputTokens: 1_000, cacheReadInputTokens: 50_000, cacheCreationInputTokens: 2_000 }
+  let book: DayBook = {}
+  book = addToBook(book, '2026-10-24', 21, { messages: 1 })
+  book = addToBook(book, '2026-10-24', 22, { messages: 4, toolCalls: 2, model: 'claude-opus-5-5', tokens: opus })
+  // Ein Tag, den /stats schon kennt, zählt nicht doppelt.
+  book = addToBook(book, '2026-10-20', 9, { messages: 99, toolCalls: 9 })
+  // Das Stundenbuch hat am 24. mehr Tokens als das Tagebuch: der Rest ist ohne Modell.
+  const hours = new Map([[dayNumber('2026-10-24'), 60_000], [dayNumber('2026-10-23'), 7_000]])
+  const merged = withBooks(CACHE as StatsCache, [book, { '2026-10-24': { messages: 2, toolCalls: 0, hour: 8, models: {} } }], hours, '2026-10-26')
+  const all = summarize(merged!, '2026-10-26', null)
+  const before = summarize(CACHE as StatsCache, '2026-10-26', null)
+  expect(all.messages - before.messages).toBe(7)
+  expect(all.toolCalls - before.toolCalls).toBe(2)
+  expect(all.sessions - before.sessions).toBe(2)
+  expect(all.tokens - before.tokens).toBe(67_000)
+  expect(all.favoriteModel).toBe(before.favoriteModel)
+  expect(merged?.dailyModelTokens?.find(d => d.date === '2026-10-24')?.tokensByModel).toEqual({ 'claude-opus-5-5': 53_010, untracked: 6_990 })
+  expect(merged?.hourCounts?.['21']).toBe(13)
+  expect(modelName('untracked')).toBe('Untracked')
+  // Ohne Zwischenspeicher reichen die Tagebücher allein.
+  expect(summarize(withBooks(null, [book], new Map(), '2026-10-26')!, '2026-10-26', null).messages).toBe(104)
+  expect(withBooks(null, [], new Map(), '2026-10-26')).toBeNull()
 })
 
 test('7d and 30d show cost once the ledger covers the whole span', () => {
@@ -531,7 +556,7 @@ test('Context breaks the window down like /context and the bar counts to auto-co
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await $.session.measure(measure)
 
-  const band = await $.ui.mount({ ...BAND, props: { ...BAND.props, bodyColumns: 140 }, surface: 'terminal' })
+  const band = await $.ui.mount({ ...BAND, props: { ...BAND.props, bodyColumns: 143 }, surface: 'terminal' })
   await band.press({ key: 'burn' })
   await band.press({ key: 'burn' })
   expect(await text(band)).toContain('110.7k to auto-compact')
@@ -586,7 +611,7 @@ test('the counter keeps its room while it counts, so the bar does not wrap or sw
 
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await $.session.measure(measure)
-  const ui = await $.ui.mount({ ...BAND, props: { ...BAND.props, bodyColumns: 105 }, surface: 'terminal' })
+  const ui = await $.ui.mount({ ...BAND, props: { ...BAND.props, bodyColumns: 108 }, surface: 'terminal' })
   const before = await text(ui)
   expect(before).toBe('✻ Session  ████████ 34% used  ·  Resets 6:40pm   1/3 ›')
 
@@ -595,7 +620,7 @@ test('the counter keeps its room while it counts, so the bar does not wrap or sw
   await clock.advance(300)
   expect(await text(ui)).toBe(before)
   await clock.advance(5_000)
-  expect(await liveText(ui)).toBe('$1.23 · 1.184m tokens · session ›')
+  expect(await liveText(ui)).toBe('$1.23 · 1.184.000 tokens · session ›')
   expect(await text(ui)).toBe(before)
   await ui.unmount()
 })
@@ -737,9 +762,8 @@ test('the cost note shortens to one line once every span is tracked', async ($, 
 })
 
 // Clawd neben dem Preis: Kopf in der Leiste, darunter zwei Zeilen, rechts davon die Szene.
-// Am Pool: Clawd mit Sonnenbrille und Schlauch, die Leiste darüber bleibt leer.
-const HEADLESS = ' '.repeat(9)
-const SHADES = '▐▀▀█▀▀▌━╾'
+// Am Hahn ohne Sonnenschirm: oben nur der aufgedrehte Hahn.
+const TAP_HEAD = '       ┻┓'
 const tapText = async (ui: Drawing) => {
   const found = await ui.find({ type: 'Box', key: 'hahn' })
 
@@ -784,8 +808,10 @@ async function openStream($: Engine, chars = 4_000) {
   }
 }
 
-// Am Pool fliegt der Strahl höchstens sechs Spalten weit.
-const hoseText = async (ui: Drawing) => (await sprayText(ui)).slice(0, 6).trimEnd()
+// Das Wasser am Hahn: Spalte 8 neben Clawd, Tropfen oder Strahl, leer ist zu.
+const tapWater = async (ui: Drawing) => ((await rowText(ui, 'clawd'))[8] ?? ' ').trim()
+const JET = /^[┃╏]$/
+const THIN = /^[│╎]$/
 
 test('every job draws in the terminal and in the apps, and tempo and size change the picture', () => {
   const colors = { suggestion: '#B1B9F9', gray: '#B0AEA5' }
@@ -830,8 +856,6 @@ test('in the light theme the white things get a contour; the dark theme stays as
     // Dunkel mit und ohne Schalter gleich.
     expect(sceneSvg(scene, { ...dark, isLight: false })).toBe(sceneSvg(scene, dark))
   }
-  const bath = sceneSvg({ role: 'bath', water: null, strength: 0, tick: 0, level: 10, arrival: -1 }, light)
-  expect(bath).toMatch(/fill="#FFFFFF" fill-opacity="0.92" stroke="#8D8B85"/)
   const shower = sceneSvg({ role: 'shower', water: null, strength: 0, tick: 0, level: 10, arrival: -1 }, light)
   expect(shower).not.toContain('fill="#FFFFFF" fill-opacity')
   const sink = sceneSvg({ role: 'tap', water: null, strength: 0, tick: 0, level: 1, arrival: -1 }, light)
@@ -861,108 +885,50 @@ test('the steam leaves Clawds face free, the deck chair is smooth, arrivals fade
   }
 })
 
-test('Clawd at the pool stands next to the price and sprays only while a reply streams', async ($, on) => {
-  engine(on)
-  const clock = mock.clock(on, { now: NOW })
-
-  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
-  await $.session.measure(measure)
-  await cast($, clock, 'pool')
-  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
-
-  // Zugedreht: Clawd mit Sonnenbrille, ohne Wasser, der Pool leer, auch wenn die Zeit vergeht.
-  expect(await tapText(ui)).toBe(HEADLESS)
-  expect(await rowText(ui, 'clawd')).toMatch(/^▐▀▀█▀▀▌━╾ +$/)
-  expect(await hoseText(ui)).toBe('')
-  expect(await puddleText(ui)).toBe('▁▁▁▁▁▁▁▁▁▁▏')
-  await clock.advance(2_000)
-  expect(await hoseText(ui)).toBe('')
-
-  usages.push({ model: 'claude-opus-5-5', input_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1_000 })
-  const close = await openStream($, 40)
-  await clock.advance(10)
-  expect(plain(await liveText(ui))).toMatch(/↓/)
-  // Wenige Tokens pro Sekunde: ein Tropfen fällt in drei Bildern von der Düse, schlägt auf, dann eine Pause.
-  const frames: string[] = []
-  const floors: string[] = []
-  for (let i = 0; i < 10; i += 1) {
-    const now = await hoseText(ui)
-    expect(now).toMatch(DROPS)
-    frames.push(now)
-    floors.push(await puddleText(ui))
-    await clock.advance(300)
-  }
-  expect(frames.slice(0, 5)).toEqual(['˙', '·', '.', '', ''])
-  expect(frames.slice(5)).toEqual(frames.slice(0, 5))
-  // Beim Aufschlag spritzt es im Pool.
-  expect(floors[3]).toMatch(/^,/)
-
-  await close()
-  await clock.advance(5_000)
-  expect(plain(await liveText(ui))).not.toMatch(/↓/)
-  expect(await hoseText(ui)).toBe('')
-  await ui.unmount()
-})
-
 test('Clawd arrives at the start and again after half an hour without replies; the water waits', async ($, on) => {
   engine(on)
   const clock = mock.clock(on, { now: NOW })
 
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await $.session.measure(measure)
-  await $.command.run({ command: 'clawd', args: 'gartenschlauch' })
+  await $.command.run({ command: 'clawd', args: 'wasserhahn' })
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
 
-  // Clawd läuft mit dem aufgerollten Schlauch von links heran, der Pool wartet schon.
+  // Clawd läuft mit dem Handy von links heran, Becken und Hahn warten schon.
   await clock.advance(5 * 120)
-  expect(await rowText(ui, 'clawd')).toMatch(/▐▛███▜▌◎/)
-  expect(await rowText(ui, 'beine')).toMatch(/▕▁+▏/)
+  expect(await rowText(ui, 'clawd')).toMatch(/▐▛███▜▌▮/)
+  expect(await rowText(ui, 'beine')).toMatch(/╲▁╱/)
   await clock.advance(ARRIVAL)
-  expect(await rowText(ui, 'clawd')).toMatch(/^▐▀▀█▀▀▌━╾/)
-  expect(await rowText(ui, 'clawd')).not.toMatch(/◎/)
+  expect(await rowText(ui, 'clawd')).toMatch(/^▐▛███▜▌▮/)
 
   // Eine Antwort gleich danach: kein neuer Auftritt, das Wasser läuft sofort.
   usages.push({ model: 'claude-opus-5-5', input_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1_000 })
   let close = await openStream($)
   await clock.advance(10)
-  expect(await hoseText(ui)).toMatch(/^[━╍]{5}┓/)
+  expect(await tapWater(ui)).toMatch(JET)
   await close()
 
-  // Nach 31 Minuten Ruhe kommt er erst wieder an, bevor er spritzt.
+  // Nach 31 Minuten Ruhe kommt er erst wieder an, bevor das Wasser läuft.
   await clock.advance(31 * 60_000)
   usages.push({ model: 'claude-opus-5-5', input_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1_000 })
   close = await openStream($)
   await clock.advance(5 * 120)
-  expect(await rowText(ui, 'clawd')).toMatch(/◎/)
-  expect(await sprayText(ui)).not.toMatch(/[━╍]/)
+  expect(await rowText(ui, 'clawd')).not.toMatch(/^▐▛███▜▌/)
+  expect(await rowText(ui, 'clawd')).not.toMatch(/[┃╏│╎]/)
   await clock.advance(ARRIVAL)
-  expect(await rowText(ui, 'clawd')).toMatch(/^▐▀▀█▀▀▌━╾/)
+  expect(await rowText(ui, 'clawd')).toMatch(/^▐▛███▜▌▮/)
   await close()
   await ui.unmount()
 })
 
-test('every job arrives its own way: on foot with phone, towel or hose, by rowboat to the lake', async ($, on) => {
+test('both jobs arrive on foot: with the phone to the tap, with a towel to the shower', async ($, on) => {
   engine(on)
   const clock = mock.clock(on, { now: NOW })
 
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await $.session.measure(measure)
-  // Halb angefahren: oben und unten je neun Spalten Fahrzeug.
-  const halfway: [string, RegExp, RegExp][] = [['see', /──▄▄▄▄▄▄▖/, /~ ▜████▛≈/]]
-  for (const [role, top, low] of halfway) {
-    await $.command.run({ command: 'clawd', args: role })
-    const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
-    await clock.advance(5 * 120)
-    expect(await rowText(ui, 'clawd')).toMatch(top)
-    expect(await rowText(ui, 'beine')).toMatch(low)
-    // Der Strohhalm kommt erst mit Clawd, nicht vor ihm.
-    expect(await rowText(ui, 'clawd')).not.toMatch(/▆▆▌|━┓/)
-    await clock.advance(ARRIVAL)
-    expect(await rowText(ui, 'beine')).not.toMatch(/●\)|▜████▛/)
-    await ui.unmount()
-  }
 
-  // Zu Fuß: Clawd kommt mit dem Handy vor der Nase, Becken und Hahn warten schon; er dreht erst dort auf.
+  // Clawd kommt mit dem Handy vor der Nase, Becken und Hahn warten schon; er dreht erst dort auf.
   await $.command.run({ command: 'clawd', args: 'wasserhahn' })
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   await clock.advance(5 * 120)
@@ -970,12 +936,12 @@ test('every job arrives its own way: on foot with phone, towel or hose, by rowbo
   expect(await rowText(ui, 'clawd')).toMatch(/▐▛███▜▌▮/)
   expect(await rowText(ui, 'beine')).toMatch(/╲▁╱/)
   await clock.advance(ARRIVAL)
-  expect(await tapText(ui)).toBe('       ┻┓')
+  expect(await tapText(ui)).toBe(TAP_HEAD)
   expect(await rowText(ui, 'beine')).toMatch(/^ ▘▘ ▝▝ ╲▁╱/)
   await ui.unmount()
 
-  // Zur Dusche und zur Wanne mit dem Handtuch.
-  await $.command.run({ command: 'clawd', args: 'wanne' })
+  // Zur Dusche mit dem Handtuch.
+  await $.command.run({ command: 'clawd', args: 'dusche' })
   const towel = await $.ui.mount({ ...BAND, surface: 'terminal' })
   await clock.advance(5 * 120)
   expect(await rowText(towel, 'clawd')).toMatch(/▐▛███▜▌▬/)
@@ -985,73 +951,30 @@ test('every job arrives its own way: on foot with phone, towel or hose, by rowbo
   await app.unmount()
 })
 
-test('the more tokens per second stream in, the further the hose sprays', async ($, on) => {
-  engine(on)
-  const clock = mock.clock(on, { now: NOW })
-
-  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
-  await $.session.measure(measure)
-  await cast($, clock, 'pool')
-  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
-
-  // 1000 Tokens auf einmal: über zwei Sekunden 500 pro Sekunde, ein starker Strahl, dessen Striche wandern.
-  usages.push({ model: 'claude-opus-5-5', input_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1_000 })
-  const close = await openStream($)
-  await clock.advance(10)
-  const first = await hoseText(ui)
-  expect(first).toMatch(/^[━╍]{5}┓$/)
-  await clock.advance(150)
-  const second = await hoseText(ui)
-  expect(second).toMatch(/^[━╍]{5}┓$/)
-  expect(second).not.toBe(first)
-  // Kommt nichts mehr nach, klingt er nach zwei Sekunden ab: erst der dünne Strahl, dann wieder ein Tröpfeln.
-  await clock.advance(2_100)
-  expect(await hoseText(ui)).toMatch(/^[╌─]{3}╮$/)
-  await clock.advance(600)
-  expect(await hoseText(ui)).toMatch(DROPS)
-  await close()
-  await ui.unmount()
-
-  // In den Apps derselbe Strahl als gestrichelter Bogen.
-  usages.push({ model: 'claude-opus-5-5', input_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 300 })
-  const app = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  const middle = await openStream($, 1_200)
-  await clock.advance(10)
-  const hose = await svgOf(app)
-  expect(hose?.props.alt).toMatch(/^Clawd in sunglasses filling the pool/)
-  // 300 Tokens: 150 pro Sekunde, ein dünner Strahl.
-  expect(String(hose?.props.source)).toContain('stroke-width="1.2"')
-  expect(String(hose?.props.source)).toContain('stroke-dasharray')
-  await middle()
-  await app.unmount()
-})
-
 test('after a reply the water runs out instead of stopping: the jet thins, the last drop falls, then the tap closes', async ($, on) => {
   engine(on)
   const clock = mock.clock(on, { now: NOW })
 
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await $.session.measure(measure)
-  await cast($, clock, 'pool')
+  await cast($, clock, 'hahn')
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
 
   usages.push({ model: 'claude-opus-5-5', input_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1_000 })
   const close = await openStream($)
   await clock.advance(10)
   await close()
-  // Gleich nach dem Ende spritzt es noch voll, dann eine Stufe nach der anderen schwächer.
-  expect(await hoseText(ui)).toMatch(/^[━╍]{5}┓$/)
+  // Gleich nach dem Ende läuft er noch voll, dann eine Stufe nach der anderen schwächer.
+  expect(await tapWater(ui)).toMatch(JET)
   await clock.advance(400)
-  expect(await hoseText(ui)).toMatch(/^[╌─]{3}╮$/)
+  expect(await tapWater(ui)).toMatch(THIN)
   await clock.advance(600)
-  expect(await hoseText(ui)).toMatch(DROPS)
-  // Der letzte Tropfen fällt zu Ende, erst dann ist der Hahn zu und bleibt es.
+  expect(await tapWater(ui)).toMatch(DROPS)
+  // Der letzte Tropfen fällt zu Ende, erst dann ist der Hahn zu.
   await clock.advance(DRAIN)
-  expect(await hoseText(ui)).toBe('')
-  await clock.advance(2_000)
-  expect(await hoseText(ui)).toBe('')
+  expect(await tapWater(ui)).toBe('')
 
-  // Kommt die nächste Antwort, solange es noch ausläuft, spritzt es ohne neue Anfahrt gleich weiter.
+  // Kommt die nächste Antwort, solange es noch ausläuft, läuft es ohne neue Anfahrt gleich weiter.
   usages.push({ model: 'claude-opus-5-5', input_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1_000 })
   let again = await openStream($)
   await clock.advance(10)
@@ -1060,61 +983,10 @@ test('after a reply the water runs out instead of stopping: the jet thins, the l
   usages.push({ model: 'claude-opus-5-5', input_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1_000 })
   again = await openStream($)
   await clock.advance(10)
-  expect(await rowText(ui, 'clawd')).toMatch(/^▐▀▀█▀▀▌━╾/)
-  expect(await hoseText(ui)).toMatch(/^[━╍]{5}┓$/)
+  expect(await rowText(ui, 'clawd')).toMatch(/^▐▛███▜▌▮/)
+  expect(await tapWater(ui)).toMatch(JET)
   await again()
   await ui.unmount()
-})
-
-test('the rowboat brakes into its stop and pulls away slowly, the oar rests while it waits', async ($, on) => {
-  engine(on)
-  const clock = mock.clock(on, { now: NOW })
-
-  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
-  await $.session.measure(measure)
-  await $.command.run({ command: 'clawd', args: 'see' })
-  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
-  // Wo der Bootsrand steht, Takt für Takt: die Schritte werden zum Halt hin kürzer.
-  const at = async () => (await rowText(ui, 'clawd')).indexOf('▄▄▄▄▄▄▖')
-  const arriving: number[] = []
-  for (let i = 1; i <= 10; i += 1) {
-    await clock.advance(120)
-    arriving.push(await at())
-  }
-  const steps = arriving.slice(1).map((x, i) => x - (arriving[i] ?? 0))
-  expect(steps.every(step => step >= 0)).toBe(true)
-  expect(steps[0]).toBeGreaterThan(steps[steps.length - 1] ?? 0)
-  expect(steps.slice(-2).every(step => step <= 1)).toBe(true)
-  // Wegfahren: es wendet und fährt nach links zurück, nie durch die Szene; erst langsam, dann immer schneller.
-  await clock.advance(4 * 120)
-  const leaving: number[] = []
-  for (let i = 0; i < 4; i += 1) {
-    leaving.push(await at())
-    await clock.advance(120)
-  }
-  const gaps = leaving.slice(1).map((x, i) => (leaving[i] ?? 0) - x)
-  expect(gaps.every(gap => gap >= 0)).toBe(true)
-  expect(gaps[gaps.length - 1]).toBeGreaterThan(gaps[0] ?? 0)
-  await ui.unmount()
-
-  // In den Apps dieselbe Kurve; im Halt ruht das Ruder, während Clawd aussteigt.
-  await $.command.run({ command: 'clawd', args: 'see' })
-  const app = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  const svg = async () => String((await svgOf(app))?.props.source)
-  const xs: number[] = []
-  for (let i = 1; i <= 9; i += 1) {
-    await clock.advance(120)
-    xs.push(Number((await svg()).match(/translate\((-?[\d.]+) 0\)/)?.[1]))
-  }
-  expect(xs[1]! - xs[0]!).toBeGreaterThan(xs[8]! - xs[7]!)
-  await clock.advance(2 * 120)
-  const oar = (source: string) => source.match(/rotate\(40 [^)]*\)/)?.[0]
-  const holding = await svg()
-  await clock.advance(120)
-  const stillHolding = await svg()
-  expect(stillHolding).not.toBe(holding)
-  expect(oar(stillHolding)).toBe(oar(holding))
-  await app.unmount()
 })
 
 test('while Clawd arrives the hidden water does not redraw the bar', async ($, on) => {
@@ -1130,7 +1002,7 @@ test('while Clawd arrives the hidden water does not redraw the bar', async ($, o
 
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await $.session.measure(measure)
-  await $.command.run({ command: 'clawd', args: 'pool' })
+  await $.command.run({ command: 'clawd', args: 'hahn' })
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   usages.push({ model: 'claude-opus-5-5', input_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1_000 })
   const close = await openStream($)
@@ -1140,46 +1012,10 @@ test('while Clawd arrives the hidden water does not redraw the bar', async ($, o
   expect(writes.drip ?? 0).toBe(drips)
   // Angekommen läuft es.
   await clock.advance(ARRIVAL)
-  expect(await hoseText(ui)).not.toBe('')
+  expect(await tapWater(ui)).not.toBe('')
   expect(writes.drip ?? 0).toBeGreaterThan(drips)
   await close()
   await ui.unmount()
-})
-
-test('the pool fills with the session tokens, a duck swims in it and at the end it overflows', async ($, on) => {
-  engine(on)
-  const clock = mock.clock(on, { now: NOW })
-
-  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
-  await $.session.measure(measure)
-  await cast($, clock, 'planschbecken')
-  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
-  await step($, 300_000, 0, 1_000)
-  await clock.advance(5_000)
-
-  // Ab 250k Tokens Stufe 3: der Pool steht ein Stück voll; rechtsbündig darunter die Liter.
-  expect(await puddleText(ui)).toBe('▂▂▂▂▂▂▂▂▂▂▏')
-  const legs = await rowText(ui, 'beine')
-  const live = plain(await liveText(ui))
-  expect(legs).toMatch(/^ ▘▘ ▝▝  ▕▂{10}▏ +≈ 113 ml$/)
-  // Die Zeile endet genau unter dem Zähler.
-  expect(legs.length).toBe(SHADES.length + 1 + live.length)
-
-  // Ab 100m ist er randvoll, die Ente schwimmt, und es läuft über.
-  await step($, 100_000_000, 0, 1_000)
-  await clock.advance(5_000)
-  expect(await puddleText(ui)).toBe('███████◗██▏▁▁')
-  await ui.unmount()
-
-  const app = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  expect((await svgOf(app))?.props.alt).toBe('Clawd in sunglasses next to the overflowing pool')
-  await app.unmount()
-
-  // Ohne Platz für drei Zeilen steht Clawd selbst in der Leiste, ohne Pool.
-  const flat = await $.ui.mount({ ...BAND, props: { ...BAND.props, maxRows: 2 }, surface: 'terminal' })
-  expect(await tapText(flat)).toBe(SHADES)
-  expect(await flat.find({ key: 'pfuetze' })).toBeUndefined()
-  await flat.unmount()
 })
 
 test('at the tap Clawd scrolls the phone while the water runs into the drain, and lounges more with every liter', async ($, on) => {
@@ -1279,9 +1115,9 @@ test('in the endless shower Clawd sings while the water runs, and the steam thic
   await cast($, clock, 'dusche')
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
 
-  // Duschhaube, Brause am Rohr; noch kein Dampf, keine Noten.
+  // Duschhaube, Brause am Rohr; noch kein Dampf, keine Noten, höchstens eine Seifenblase.
   expect(await tapText(ui)).toBe('▗▄▆▆▆▄▖┳┓')
-  expect(await rowText(ui, 'clawd')).toMatch(/^▐▛███▜▌ ┃ +$/)
+  expect(await rowText(ui, 'clawd')).toMatch(/^▐▛███▜▌ ┃[ o°˙]+$/)
   expect(await puddleText(ui)).toBe('')
 
   // Viel Tempo: der Strahl prasselt neben ihm herab, und er singt.
@@ -1300,7 +1136,7 @@ test('in the endless shower Clawd sings while the water runs, and the steam thic
   await step($, 10_000_000, 0, 1_000)
   await clock.advance(5_000)
   expect(await puddleText(ui)).toMatch(/^[░▒]{7}$/)
-  expect(await sprayText(ui)).toMatch(/^[░▒]{4}$/)
+  expect(await sprayText(ui)).toMatch(/^[░▒o°˙]{4}$/)
   await ui.unmount()
 
   const steamy = await $.ui.mount({ ...BAND, surface: 'desktop' })
@@ -1310,78 +1146,48 @@ test('in the endless shower Clawd sings while the water runs, and the steam thic
   await steamy.unmount()
 })
 
-test('in the bathtub the foam piles up with the session, and at the end it spills over', async ($, on) => {
+test('idle, Clawd blinks; the tap leaks one drop per loop, in the shower soap bubbles rise and pop', async ($, on) => {
   engine(on)
   const clock = mock.clock(on, { now: NOW })
 
-  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.session.start({ cwd: '/', surface: 'vscode', isInteractive: true })
   await $.session.measure(measure)
-  await cast($, clock, 'badewanne')
-  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await cast($, clock, 'hahn')
+  const app = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  // Eine ganze Schleife von 15 s im Halbsekundentakt: die Bilder wechseln, mal blinzelt er, einmal
+  // fällt ein Tropfen aus dem Hahn.
+  const sources = new Set<string>()
+  let blinks = 0
+  let drops = 0
+  for (let i = 0; i < 30; i += 1) {
+    await clock.advance(500)
+    const source = String((await svgOf(app))?.props.source)
+    sources.add(source)
+    if (source.includes('height="0.5" fill="#1F1E1D"')) blinks += 1
+    if (/<ellipse cx="47.2" cy="[\d.]+" rx="0.9" ry="1.2"/.test(source)) drops += 1
+  }
+  expect(sources.size).toBeGreaterThanOrEqual(8)
+  expect(blinks).toBe(2)
+  expect(drops).toBe(3)
+  await app.unmount()
 
-  // Hahn über der Wanne, Clawd sitzt drin; noch kein Schaum.
-  expect(await tapText(ui)).toBe('       ┻┓')
-  expect(await rowText(ui, 'beine')).toMatch(/^▙▄▄▄▄▄▄▄▟ *$/)
-  expect(await sprayText(ui)).toBe('')
-
-  // Viel Tempo: der Hahn läuft in die Wanne.
+  await cast($, clock, 'dusche')
+  const shower = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  let bubbles = 0
+  for (let i = 0; i < 30; i += 1) {
+    await clock.advance(500)
+    if (String((await svgOf(shower))?.props.source).includes('r="1.5" fill="#B1B9F9" fill-opacity="0.15"')) bubbles += 1
+  }
+  expect(bubbles).toBeGreaterThan(20)
+  // Kommt eine Antwort, ist der Leerlauf vorbei: er singt, keine Seifenblasen.
   usages.push({ model: 'claude-opus-5-5', input_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1_000 })
   const close = await openStream($)
   await clock.advance(10)
-  expect(await rowText(ui, 'clawd')).toMatch(/^▐▛███▜▌[˙ ][┃╏]/)
+  const singing = String((await svgOf(shower))?.props.source)
+  expect((await svgOf(shower))?.props.alt).toBe('Clawd singing in the shower')
+  expect(singing).not.toContain('fill-opacity="0.15"')
   await close()
-  await clock.advance(DRAIN)
-
-  // Ab 250k Stufe 3: drei Schaumblasen neben ihm.
-  await step($, 300_000, 0, 1_000)
-  await clock.advance(5_000)
-  expect(await sprayText(ui)).toMatch(/^[°o○]{3}$/)
-
-  // Ab 100m türmt sich der Schaum auch über ihm, und es schwappt über.
-  await step($, 100_000_000, 0, 1_000)
-  await clock.advance(5_000)
-  expect(await tapText(ui)).toMatch(/^[°o○ ]{7}┻┓$/)
-  expect(await puddleText(ui)).toMatch(/^▁▂+▁$/)
-  await ui.unmount()
-
-  const app = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  expect((await svgOf(app))?.props.alt).toBe('Clawd in the overflowing bathtub')
-  await app.unmount()
-})
-
-test('Clawd slurps the lake through a straw: bubbles with the tempo, the lake dries up with the session', async ($, on) => {
-  engine(on)
-  const clock = mock.clock(on, { now: NOW })
-
-  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
-  await $.session.measure(measure)
-  await cast($, clock, 'strohhalm')
-  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
-
-  expect(await tapText(ui)).toBe('▁▂▅▅▅▂▁▁ ')
-  expect(await rowText(ui, 'clawd')).toMatch(/^▐▛███▜▌━━━┓ +$/)
-  expect(await puddleText(ui)).toBe('≈┃≈≈≈≈≈≈≈≈≈≈≈')
-  await step($, 300_000, 0, 1_000)
-  await clock.advance(5_000)
-  expect(await puddleText(ui)).toBe('≈┃≈≈≈≈≈≈≈≈▁▁▁')
-
-  // Beim Saugen steigen Blasen auf.
-  usages.push({ model: 'claude-opus-5-5', input_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1_000 })
-  const close = await openStream($)
-  await clock.advance(10)
-  expect(await sprayText(ui)).toMatch(/^━┓ *[°o]/)
-  await close()
-  await clock.advance(DRAIN)
-
-  // Ab 100m ist er leer: rissiger Boden, und ein Fisch liegt auf dem Trockenen.
-  await step($, 100_000_000, 0, 1_000)
-  await clock.advance(5_000)
-  expect(await puddleText(ui)).toBe('▁┃▁▁ˇ▁▁ˇ▁><>▁')
-  await ui.unmount()
-
-  const app = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  expect((await svgOf(app))?.props.alt).toBe('Clawd with a straw at the dried-up lake')
-  await app.unmount()
+  await shower.unmount()
 })
 
 test('/clawd switches the job, or names the ones it knows', async ($, on) => {
@@ -1391,21 +1197,20 @@ test('/clawd switches the job, or names the ones it knows', async ($, on) => {
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   expect((await $.command.run({ command: 'clawd', args: 'hahn' })).text).toBe('Clawd: tap.')
   expect((await $.command.run({ command: 'clawd', args: '' })).text).toBe('Clawd: shower.')
-  expect((await $.command.run({ command: 'clawd', args: 'Pool' })).text).toBe('Clawd: pool.')
-  expect((await $.command.run({ command: 'clawd', args: 'badewanne' })).text).toBe('Clawd: bath.')
-  expect((await $.command.run({ command: 'clawd', args: 'see' })).text).toBe('Clawd: lake.')
+  expect((await $.command.run({ command: 'clawd', args: 'Brause' })).text).toBe('Clawd: shower.')
   expect((await $.command.run({ command: 'clawd', args: '' })).text).toBe('Clawd: tap.')
-  expect((await $.command.run({ command: 'clawd', args: 'pirat' })).text).toBe('Clawd knows: tap, shower, pool, bath, lake.')
+  // Pool, Wanne und See gibt es nicht mehr.
+  expect((await $.command.run({ command: 'clawd', args: 'pool' })).text).toBe('Clawd knows: tap, shower.')
 })
 
-test('Clawd keeps his width, so the bar does not wrap or switch details while he sprays', async ($, on) => {
+test('Clawd keeps his width, so the bar does not wrap or switch details while the water runs', async ($, on) => {
   engine(on)
   const clock = mock.clock(on, { now: NOW })
 
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await $.session.measure(measure)
-  await cast($, clock, 'pool')
-  const ui = await $.ui.mount({ ...BAND, props: { ...BAND.props, bodyColumns: 113 }, surface: 'terminal' })
+  await cast($, clock, 'hahn')
+  const ui = await $.ui.mount({ ...BAND, props: { ...BAND.props, bodyColumns: 116 }, surface: 'terminal' })
   const before = await text(ui)
   expect(before).toBe('✻ Session  ████████ 34% used  ·  Resets 6:40pm   1/3 ›')
 
@@ -1414,7 +1219,7 @@ test('Clawd keeps his width, so the bar does not wrap or switch details while he
   for (let i = 0; i < 5; i += 1) {
     await clock.advance(300)
     expect(await text(ui)).toBe(before)
-    expect(await tapText(ui)).toBe(HEADLESS)
+    expect(await tapText(ui)).toBe(TAP_HEAD)
   }
   await close()
   await clock.advance(5_000)
@@ -1428,8 +1233,8 @@ test('in a very narrow bar Clawd goes before any number does', async ($, on) => 
 
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await $.session.measure(measure)
-  await cast($, clock, 'pool')
-  const narrow = await $.ui.mount({ ...BAND, props: { ...BAND.props, bodyColumns: 69 }, surface: 'terminal' })
+  await cast($, clock, 'hahn')
+  const narrow = await $.ui.mount({ ...BAND, props: { ...BAND.props, bodyColumns: 72 }, surface: 'terminal' })
   expect(await tapText(narrow)).toBeUndefined()
   expect(plain(await liveText(narrow))).toBe('$1.23 · 0 tokens · session ›')
   // Ohne Clawd bleibt links genauso viel wie vorher.
@@ -1437,39 +1242,13 @@ test('in a very narrow bar Clawd goes before any number does', async ($, on) => 
   await narrow.unmount()
 
   // Knapp: lieber Clawd weg als die Uhrzeit links.
-  const tight = await $.ui.mount({ ...BAND, props: { ...BAND.props, bodyColumns: 106 }, surface: 'terminal' })
+  const tight = await $.ui.mount({ ...BAND, props: { ...BAND.props, bodyColumns: 109 }, surface: 'terminal' })
   expect(await tapText(tight)).toBeUndefined()
   expect(await text(tight)).toBe('✻ Session  ████████ 34% used  ·  Resets 6:40pm   1/3 ›')
   await tight.unmount()
-  const roomy = await $.ui.mount({ ...BAND, props: { ...BAND.props, bodyColumns: 113 }, surface: 'terminal' })
-  expect(await tapText(roomy)).toBe(HEADLESS)
+  const roomy = await $.ui.mount({ ...BAND, props: { ...BAND.props, bodyColumns: 116 }, surface: 'terminal' })
+  expect(await tapText(roomy)).toBe(TAP_HEAD)
   await roomy.unmount()
-})
-
-test('in the apps Clawd is a pixel Svg: he walks in with the hose, then stands at the pool', async ($, on) => {
-  engine(on)
-  const clock = mock.clock(on, { now: NOW })
-
-  await $.session.start({ cwd: '/', surface: 'vscode', isInteractive: true })
-  await $.session.measure(measure)
-  await $.command.run({ command: 'clawd', args: 'pool' })
-  const app = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  const walking = await svgOf(app)
-  expect(walking?.props.alt).toBe('Clawd walking in with a garden hose')
-  expect(String(walking?.props.source)).toContain('translate(')
-  await clock.advance(ARRIVAL)
-
-  const clawd = await svgOf(app)
-  expect(clawd?.props.alt).toBe('Clawd in sunglasses next to the pool')
-  expect(clawd?.props).toEqual(expect.objectContaining({ width: 90, height: 41 }))
-  // Sonnenbrille, Messingdüse, grüner Schlauch, blauer Pool, kein Wasser im Bogen.
-  expect(String(clawd?.props.source)).toContain('#1F1E1D')
-  expect(String(clawd?.props.source)).toContain('#D4A93F')
-  expect(String(clawd?.props.source)).toContain('#4E8A3E')
-  expect(String(clawd?.props.source)).toContain('#4A6FA5')
-  expect(String(clawd?.props.source)).not.toContain('stroke-dasharray')
-  expect(await tapText(app)).toBeUndefined()
-  await app.unmount()
 })
 
 test('model ids read as names, also with a date or the older order', () => {

@@ -19,8 +19,10 @@ import {
   scenePixels,
   FLOWS,
   RESTING,
+  IDLE_LOOP,
   ROLES,
   ROLE_WORDS,
+  idleDrip,
   SLOT,
   arrivalLength,
   isRestingAt,
@@ -33,8 +35,8 @@ import {
   terminalScene,
 } from './clawd'
 import type { Piece } from './clawd'
-import { MONTHS, RANGES, dateOf, dayNumber, heatmap, modelName, summarize } from './stats'
-import type { StatsCache } from './stats'
+import { MONTHS, RANGES, addToBook, dateOf, dayNumber, heatmap, modelName, summarize, withBooks } from './stats'
+import type { DayBook, StatsCache } from './stats'
 
 // Tag ändern, wenn sich die Felder ändern: Werte einer älteren Fassung
 // überstehen ein Neuladen und würden sonst falsch gelesen.
@@ -135,6 +137,12 @@ const ARRIVE_TICK = 120
 const PAUSE = 30 * 60_000
 let arrivalNow = -1
 let arriver: { cancel: () => void } | undefined
+// Der Leerlauf (siehe clawd.ts): Bild 0 bis IDLE_LOOP - 1, solange Clawd dasteht und nichts
+// streamt, sonst -1. Der Takt läuft immer mit, schreibt aber nur, wenn er etwas zu zeigen hat.
+const idle = atom({ plugin: 'burn', key: 'idle' } as const, -1)
+const IDLE_TICK = 500
+let idleNow = -1
+let idler: { cancel: () => void } | undefined
 let lastActive = 0
 // Ab wann das Kassenbuch zählt; aus dem Store gelesen, nicht bei jedem Bild.
 let trackedSince: number | undefined
@@ -170,6 +178,12 @@ const liveOut = atom(
   { session: 0, day: 0, week: 0, month: 0, all: 0 },
   { shape: 'live-out-1' },
 )
+// Das Tagebuch dieser Unterhaltung für /tokenstats (siehe stats.ts), unter ihrer Id, damit ein
+// Fortsetzen es weiterführt.
+const DAYS_PREFIX = 'days:'
+let daysKey: string | undefined
+let ownDays: DayBook = {}
+
 // So breit stehen die Liter höchstens da, damit die Leiste beim Hochzählen nicht umbricht.
 const LITER_WIDTH = ' ≈ 00,0 L'.length
 
@@ -280,15 +294,11 @@ function count(n: number): string {
   return String(Math.round(n))
 }
 
-// Rechts in der Leiste genauer, damit man das Hochzählen auch bei Millionen sieht: 1.234m.
-function liveCount(n: number): string {
-  if (n >= 999_999_500) return `${(n / 1e9).toFixed(3)}b`
-  if (n >= 999_950) return `${(n / 1e6).toFixed(3)}m`
-
-  return count(n)
-}
-// Die längste Form davon: so viel Platz hält die Leiste rechts frei.
-const LIVE_WIDTH = '000.000m'.length
+// Rechts in der Leiste immer die ganze Zahl, mit Punkten gegliedert: 1.725.034.112 (seit 0.19.0).
+const liveCount = (n: number) => Math.round(n).toLocaleString('de-DE')
+// So viel Platz hält die Leiste rechts frei: die größte Zahl (all time) mit ihren Stellen voll
+// Neunen, mindestens neunstellig. So bleibt er beim Hochzählen und beim Wechsel des Zeitraums gleich.
+const liveRoomFor = (n: number) => liveCount(10 ** Math.max(9, String(Math.round(Math.max(0, n))).length) - 1).length
 
 // Der Zähler läuft dem Stand nach wie im Spinner: große Sprünge schnell, kleine Schritte sichtbar.
 function grow($: EngineInterface, delta: number) {
@@ -319,6 +329,18 @@ async function publish($: EngineInterface, force = false) {
     await update($, streamed, () => inFlight)
   }
   await update($, lag, () => behind)
+}
+
+async function idleTick($: EngineInterface) {
+  const isIdle = arrivalNow < 0 && dripper === undefined && !(await read($, isHidden))
+  if (!isIdle) {
+    if (idleNow === -1) return
+    idleNow = -1
+    await update($, idle, () => -1)
+    return
+  }
+  idleNow = (idleNow + 1) % IDLE_LOOP
+  await update($, idle, () => idleNow)
 }
 
 // Dreht den Hahn auf, solange etwas streamt; danach läuft das Wasser aus (siehe flowTick),
@@ -585,6 +607,33 @@ function barColor(percent: number) {
 
 const berlinDay = (ms: number) => dayNumber(berlin(ms).toISOString())
 
+// Trägt etwas ins Tagebuch ein, am heutigen Tag in deutscher Zeit.
+async function note($: EngineInterface, add: Parameters<typeof addToBook>[3]) {
+  if (daysKey === undefined) return
+  const local = berlin(await $.clock.now())
+  ownDays = addToBook(ownDays, local.toISOString().slice(0, 10), local.getUTCHours(), add)
+  await $.store.set(daysKey, ownDays)
+}
+
+// Was /tokenstats zeigt: der Zwischenspeicher, danach Tagebücher und Stundenbuch.
+async function statsOf($: EngineInterface): Promise<StatsCache | null> {
+  const books: DayBook[] = []
+  for (const key of (await $.store.keys()).filter(k => k.startsWith(DAYS_PREFIX))) {
+    const value = key === daysKey ? ownDays : ((await $.store.get(key)) as DayBook | undefined)
+    if (value !== undefined && typeof value === 'object') books.push(value)
+  }
+  const hourTokens = new Map<number, number>()
+  for (const ledger of await ledgersOf($, PREFIX, LEDGER_KEY, ownLedger)) {
+    for (const [hour, value] of Object.entries(ledger.buckets)) {
+      const day = berlinDay(Number(hour))
+      hourTokens.set(day, (hourTokens.get(day) ?? 0) + value)
+    }
+  }
+  const today = berlin(await $.clock.now()).toISOString().slice(0, 10)
+
+  return withBooks(await readCache($), books, hourTokens, today)
+}
+
 async function readCache($: EngineInterface): Promise<StatsCache | null> {
   const at = await $.clock.now()
   if (statsCache !== undefined && at - statsCache.at < 60_000) return statsCache.value
@@ -686,7 +735,10 @@ const sumOf = (t: TokenTotals) => t.input + t.output + t.cacheRead + t.cacheWrit
 
 // Beim Start: die gespeicherten Tokens zurück, sonst den Preis als Nullpunkt, wenn er schon läuft.
 async function restoreTally($: EngineInterface) {
-  tallyKey = `${TALLY_PREFIX}${await $.session.id()}`
+  const id = await $.session.id()
+  tallyKey = `${TALLY_PREFIX}${id}`
+  daysKey = `${DAYS_PREFIX}${id}`
+  ownDays = ((await $.store.get(daysKey)) as DayBook | undefined) ?? {}
   const kept = (await $.store.get(tallyKey)) as { tokens: TokenTotals; costBase: number } | undefined
   const held = await read($, tokens)
   if (kept !== undefined && sumOf(kept.tokens) > sumOf(held)) await update($, tokens, () => kept.tokens)
@@ -709,6 +761,15 @@ async function countUsage($: EngineInterface, used: ModelUsage, withdrawn: numbe
     cacheWrite: totals.cacheWrite + used.cache_creation_input_tokens,
   }))
   await saveTally($)
+  await note($, {
+    model: 'model' in used && typeof used.model === 'string' ? used.model : 'unknown',
+    tokens: {
+      inputTokens: used.input_tokens,
+      outputTokens: used.output_tokens,
+      cacheReadInputTokens: used.cache_read_input_tokens,
+      cacheCreationInputTokens: used.cache_creation_input_tokens,
+    },
+  })
   const amount =
     used.input_tokens + used.output_tokens + used.cache_read_input_tokens + used.cache_creation_input_tokens
   const at = await $.clock.now()
@@ -761,7 +822,7 @@ export const register: Register = on => {
     })
     await $.command.register({
       name: 'clawd',
-      description: "Change Clawd's job in the usage bar; /clawd <job> picks one: tap, shower, pool, bath or lake",
+      description: "Change Clawd's job in the usage bar; /clawd <job> picks one: tap or shower",
     })
 
     const usage = await $.session.usage()
@@ -795,6 +856,11 @@ export const register: Register = on => {
 
     await refreshLive($).catch(() => undefined)
     void refreshContext($, true).catch(() => undefined)
+
+    idler?.cancel()
+    idleNow = -1
+    await update($, idle, () => -1)
+    idler = $.clock.every(IDLE_TICK, () => void idleTick($).catch(() => undefined))
 
     // Jede Minute neu zeichnen, damit Restzeit, Dauer, Resets und 24h stimmen.
     $.clock.every(60_000, () => {
@@ -867,8 +933,10 @@ export const register: Register = on => {
     const stream = next(e)
     let chars = 0
     let shown = 0
+    let hasThought = false
     for await (const chunk of stream) {
       yield chunk
+      if (chunk.kind === 'thinking') hasThought = true
       if (chunk.kind === 'text' || chunk.kind === 'thinking') chars += chunk.text.length
       else if (chunk.kind === 'input') chars += chunk.json.length
       const estimate = Math.round(chars / 4)
@@ -889,8 +957,21 @@ export const register: Register = on => {
       await publish($)
     }
     if (used !== null) await countUsage($, used, withdrawn)
+    // Fürs Tagebuch wie im Transkript: je Block der Antwort eine Message, je Tool-Call sein Ergebnis.
+    if (response.stopReason !== null) {
+      const calls = response.toolUses.length
+      const blocks = (hasThought ? 1 : 0) + (response.answer === '' ? 0 : 1) + calls
+      await note($, { messages: Math.max(1, blocks) + calls, toolCalls: calls }).catch(() => undefined)
+    }
 
     return response
+  })
+
+  // Jeder Prompt ist eine Message.
+  on('prompt.submit', async ($, e, next) => {
+    await note($, { messages: 1 }).catch(() => undefined)
+
+    return next(e)
   })
 
   // Auch das Kompaktieren ist ein Modellaufruf, aber kein turn.step: der Preis
@@ -1330,7 +1411,7 @@ export const register: Register = on => {
       )
     }
 
-    const cache = await readCache($)
+    const cache = await statsOf($)
     if (cache === null) {
       return (
         <Box flexDirection="column">
@@ -1745,14 +1826,15 @@ export const register: Register = on => {
       costFrom(span.key, trackedSince, nowMs, berlinDay) === true ? `$${costs[span.key].toFixed(2)}` : ''
     const inFlight = await read($, streamed)
     const behindBy = await read($, lag)
-    const liveValue = liveCount(Math.max(0, totals[span.key] + inFlight - behindBy))
+    const liveTotal = Math.max(0, totals[span.key] + inFlight - behindBy)
+    const liveValue = liveCount(liveTotal)
     // ↓ wie im Spinner, solange eine Antwort hereinkommt.
     const liveArrow = inFlight > 0 ? '↓ ' : ''
     const liveRest = ` tokens · ${span.label} ›`
     // Fest reserviert, mit Pfeil und der längsten Zahl: so bricht die Leiste beim
     // Hochzählen nicht um, und die Details links wechseln nicht mit dem Zählerstand.
     const liveRoomOf = (withMoney: boolean) =>
-      (liveMoney === '' || !withMoney ? 0 : '$000.00 · '.length) + '↓ '.length + LIVE_WIDTH + liveRest.length
+      (liveMoney === '' || !withMoney ? 0 : '$000.00 · '.length) + '↓ '.length + liveRoomFor(Math.max(liveTotal, totals.all)) + liveRest.length
     const liveRoom = liveRoomOf(true)
     // Clawd steht in beiden Zuständen gleich breit da (dafür zwei Leerzeichen weniger davor).
     // Er kommt nur, wenn links dafür nichts wegfallen muss.
@@ -1764,8 +1846,14 @@ export const register: Register = on => {
     const isDripping = flowAt >= 0 && arrivalAt < 0
     const strength = Math.max(0, flowAt)
     const frames = FLOWS[strength] ?? FLOWS[0] ?? [RESTING]
-    const water = isDripping ? (frames[(await read($, drip)) % frames.length] ?? RESTING) : null
     const roleAt = ROLES[(await read($, role)) % ROLES.length] ?? 'tap'
+    // Im Leerlauf tickt die Szene im eigenen Takt, und am Hahn fällt ab und zu ein Tropfen.
+    const idleAt = isDripping || arrivalAt >= 0 ? -1 : await read($, idle)
+    const water = isDripping
+      ? (frames[(await read($, drip)) % frames.length] ?? RESTING)
+      : idleAt >= 0 && roleAt === 'tap'
+        ? idleDrip(idleAt)
+        : null
     // Die Liter wie der Zähler (Session, 24h, ...); am Hahn die Bequemlichkeit nach der Sitzung.
     const isTap = roleAt === 'tap'
     const outs = await read($, liveOut)
@@ -1775,7 +1863,8 @@ export const register: Register = on => {
       role: roleAt,
       water,
       strength,
-      tick: await read($, drip),
+      tick: idleAt >= 0 ? idleAt : await read($, drip),
+      idle: idleAt,
       level: isTap ? tapLevel(sessionOut * ML_PER_TOKEN) : sizeLevel(Math.max(0, totals.session + inFlight - behindBy)),
       liters,
       arrival: arrivalAt,
@@ -1878,7 +1967,7 @@ export const register: Register = on => {
     // In den Apps stehen die Liter neben dem Becken, im Terminal zeichnet sie die Szene.
     const literPart =
       !isTerminal ? (
-        <Text key="liter" size="footnote" color="suggestion" dimColor tabular>
+        <Text key="liter" size="footnote" color="suggestion" tabular>
           {nb(liters === '' ? '' : ` ${liters}`)}
         </Text>
       ) : null

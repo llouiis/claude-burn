@@ -143,12 +143,12 @@ const textScale = async (ui: Drawn) => {
 // Alle Knoten eines Baums, die Wurzel zuerst.
 const nodesOf = (tree: Tree): Tree[] => [tree, ...(tree.children ?? []).filter(k => typeof k === 'object' && k !== null).flatMap(nodesOf)]
 
-const WIDTHS = [45, 55, 70, 100]
+const WIDTHS = [50, 55, 70, 100]
 // In VS Code: ab hier eine Zeile, ab hier die großen Box-Pixel.
-const ROW_FROM = 101
-const LARGE_FROM = 106
+const ROW_FROM = 106
+const LARGE_FROM = 111
 
-test('in the desktop app the bar fits every width, one row from 101 columns; wider never shows Clawd smaller', async ($, on) => {
+test('in the desktop app the bar fits every width, one row from 106 columns; wider never shows Clawd smaller', async ($, on) => {
   engine(on)
   await $.session.start({ cwd: '/', surface: 'vscode', isInteractive: true })
   await $.session.measure(measure)
@@ -160,12 +160,12 @@ test('in the desktop app the bar fits every width, one row from 101 columns; wid
       const svg = (await clawd(ui)) as { props: Record<string, unknown> } | undefined
       const scale = svg === undefined ? 0 : Number(svg.props.width) / 60
       const isRow = !JSON.stringify(await ui.drawn()).includes('"flexDirection":"column"')
-      // Unter 42 Spalten ohne Clawd, dann gestapelt 1-fach, ab 101 in einer Zeile 1-fach, ab 105 Spalten 1,5-fach.
+      // Unter 47 Spalten ohne Clawd, dann gestapelt 1-fach, ab 106 in einer Zeile 1-fach, ab 110 Spalten 1,5-fach.
       expect({ surface, bodyColumns, scale, isRow }).toEqual({
         surface,
         bodyColumns,
-        scale: bodyColumns >= 105 ? 1.5 : bodyColumns >= 42 ? 1 : 0,
-        isRow: bodyColumns >= 101,
+        scale: bodyColumns >= 110 ? 1.5 : bodyColumns >= 47 ? 1 : 0,
+        isRow: bodyColumns >= 106,
       })
       // Monoton: eine Spalte mehr zeigt Clawd nie kleiner und stapelt nie wieder.
       expect({ bodyColumns, grows: scale >= last.scale && (isRow || !last.isRow) }).toEqual({ bodyColumns, grows: true })
@@ -185,7 +185,7 @@ test('in VS Code the bar draws no Svg: the bar is a Box, Clawd is Box pixels, an
   await $.session.start({ cwd: '/', surface: 'vscode', isInteractive: true })
   await $.session.measure(measure)
   // Die Rolle fest, sonst lost die Sitzung eine aus und die Szene ändert sich von Lauf zu Lauf.
-  await $.command.run({ command: 'clawd', args: 'pool' })
+  await $.command.run({ command: 'clawd', args: 'dusche' })
 
   let last = { scale: 0, isRow: false }
   for (let bodyColumns = 40; bodyColumns <= 140; bodyColumns += 1) {
@@ -205,10 +205,10 @@ test('in VS Code the bar draws no Svg: the bar is a Box, Clawd is Box pixels, an
     expect({ bodyColumns, small: all.length <= 300 }).toEqual({ bodyColumns, small: true })
     const scale = await textScale(ui)
     const isRow = drawn.props?.flexDirection !== 'column'
-    // Ab 42 Spalten gestapelt mit kleinen Pixeln, ab ROW_FROM in einer Zeile, ab LARGE_FROM große.
+    // Ab 47 Spalten gestapelt mit kleinen Pixeln, ab ROW_FROM in einer Zeile, ab LARGE_FROM große.
     expect({ bodyColumns, scale, isRow }).toEqual({
       bodyColumns,
-      scale: bodyColumns >= LARGE_FROM ? 1.5 : bodyColumns >= 42 ? 1 : 0,
+      scale: bodyColumns >= LARGE_FROM ? 1.5 : bodyColumns >= 47 ? 1 : 0,
       isRow: bodyColumns >= ROW_FROM,
     })
     expect({ bodyColumns, grows: scale >= last.scale && (isRow || !last.isRow) }).toEqual({ bodyColumns, grows: true })
@@ -355,7 +355,7 @@ test('details go before Clawd; only a tiny panel sends him aside', async ($, on)
   await wide.unmount()
 
   // Etwas schmaler: der Reset fehlt, Clawd steht noch da.
-  const less = await $.ui.mount({ ...BAND, props: { ...BAND.props, bodyColumns: 104 }, surface: 'vscode' })
+  const less = await $.ui.mount({ ...BAND, props: { ...BAND.props, bodyColumns: 109 }, surface: 'vscode' })
   expect(await resets(less)).toBe(false)
   expect(await clawd(less)).toBeDefined()
   await less.unmount()
@@ -478,6 +478,6 @@ test('a resumed session finds its tokens again and keeps its full cost', async (
   engine(on, { usd: 32.79, stored: { 'tally:sitzung-1': tally } })
   await $.session.start({ cwd: '/', surface: 'vscode', isInteractive: true })
   const ui = await $.ui.mount({ ...BAND, surface: 'vscode' })
-  expect(textOf((await ui.drawn()) as Node)).toContain('$32.79 · 1.131m tokens · [session ›]')
+  expect(textOf((await ui.drawn()) as Node)).toContain('$32.79 · 1.131.000 tokens · [session ›]')
   await ui.unmount()
 })

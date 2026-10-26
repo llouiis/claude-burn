@@ -1,5 +1,8 @@
 // Liest Claude Codes eigenen /stats-Zwischenspeicher (~/.claude/stats-cache.json)
 // und rechnet daraus, was das Statistik-Fenster zeigt. Keine Aufrufe an `$`.
+// Claude Code schreibt ihn nur neu, wenn /stats im Terminal läuft; in den Apps bleibt er
+// stehen. Deshalb führt Burn ab 0.19.0 ein eigenes Tagebuch je Unterhaltung (DayBook) und
+// zählt damit alle Tage nach dem letzten Rechentag des Zwischenspeichers.
 
 type DailyActivity = {
   date: string
@@ -23,6 +26,98 @@ export type StatsCache = {
   longestSession?: { duration: number }
   firstSessionDate?: string
   hourCounts?: Record<string, number>
+}
+
+// Ein Tag einer Unterhaltung: Messages wie im Transkript (Prompts, je Antwort ihre Blöcke,
+// je Tool-Call sein Ergebnis; Anhänge und Systemzeilen, die /stats auch zählt, sieht Burn
+// nicht), Tool-Calls, die Stunde, in der sie an dem Tag begann, und die Tokens je Modell.
+export type DayEntry = { messages: number; toolCalls: number; hour: number; models: Record<string, ModelTotals> }
+export type DayBook = Record<string, DayEntry>
+// Tokens aus dem Stundenbuch, die kein Tagebuch einem Modell zuordnet (vor 0.19.0 gezählt).
+export const UNTRACKED = 'untracked'
+const NO_TOKENS: ModelTotals = { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 }
+export const totalOf = (m: ModelTotals) => m.inputTokens + m.outputTokens + m.cacheReadInputTokens + m.cacheCreationInputTokens
+
+export function addToBook(book: DayBook, date: string, hour: number, add: Partial<Omit<DayEntry, 'hour' | 'models'>> & { model?: string; tokens?: ModelTotals }): DayBook {
+  const was = book[date] ?? { messages: 0, toolCalls: 0, hour, models: {} }
+  const models = { ...was.models }
+  if (add.model !== undefined && add.tokens !== undefined) {
+    const m = models[add.model] ?? NO_TOKENS
+    models[add.model] = {
+      inputTokens: m.inputTokens + add.tokens.inputTokens,
+      outputTokens: m.outputTokens + add.tokens.outputTokens,
+      cacheReadInputTokens: m.cacheReadInputTokens + add.tokens.cacheReadInputTokens,
+      cacheCreationInputTokens: m.cacheCreationInputTokens + add.tokens.cacheCreationInputTokens,
+    }
+  }
+
+  return {
+    ...book,
+    [date]: { messages: was.messages + (add.messages ?? 0), toolCalls: was.toolCalls + (add.toolCalls ?? 0), hour: was.hour, models },
+  }
+}
+
+// Der Zwischenspeicher bis zu seinem letzten Rechentag, danach die Tagebücher. Die Tokens je Tag
+// danach kommen aus dem Stundenbuch (`hourTokens`, Tag in deutscher Zeit wie `dayNumber`), damit
+// sie zur Leiste passen; was davon keinem Modell zugeordnet ist, steht unter UNTRACKED.
+export function withBooks(cache: StatsCache | null, books: DayBook[], hourTokens: Map<number, number>, today: string): StatsCache | null {
+  const lastDay = cache?.lastComputedDate === undefined ? Number.NEGATIVE_INFINITY : dayNumber(cache.lastComputedDate)
+  const days = new Map<number, { activity: DailyActivity; models: Map<string, number> }>()
+  const usage: Record<string, ModelTotals> = { ...(cache?.modelUsage ?? {}) }
+  const hours: Record<string, number> = { ...(cache?.hourCounts ?? {}) }
+  const dayOf = (day: number) => {
+    let entry = days.get(day)
+    if (entry === undefined) {
+      entry = { activity: { date: dateOf(day), messageCount: 0, sessionCount: 0, toolCallCount: 0 }, models: new Map() }
+      days.set(day, entry)
+    }
+    return entry
+  }
+  for (const book of books) {
+    for (const [date, entry] of Object.entries(book)) {
+      const day = dayNumber(date)
+      if (day <= lastDay) continue
+      const { activity, models } = dayOf(day)
+      activity.messageCount += entry.messages
+      activity.toolCallCount += entry.toolCalls
+      activity.sessionCount += 1
+      hours[String(entry.hour)] = (hours[String(entry.hour)] ?? 0) + 1
+      for (const [model, m] of Object.entries(entry.models)) {
+        models.set(model, (models.get(model) ?? 0) + totalOf(m))
+        const was = usage[model] ?? NO_TOKENS
+        usage[model] = {
+          inputTokens: was.inputTokens + m.inputTokens,
+          outputTokens: was.outputTokens + m.outputTokens,
+          cacheReadInputTokens: was.cacheReadInputTokens + m.cacheReadInputTokens,
+          cacheCreationInputTokens: was.cacheCreationInputTokens + m.cacheCreationInputTokens,
+        }
+      }
+    }
+  }
+  for (const [day, amount] of hourTokens) {
+    if (day <= lastDay || amount <= 0) continue
+    const { models } = dayOf(day)
+    const known = [...models.values()].reduce((a, b) => a + b, 0)
+    if (amount > known) models.set(UNTRACKED, amount - known)
+  }
+  if (cache === null && days.size === 0) return null
+
+  const added = [...days.entries()].sort((a, b) => a[0] - b[0])
+  const firstAdded = added[0] === undefined ? undefined : dateOf(added[0][0])
+  const first = [cache?.firstSessionDate, firstAdded].filter((d): d is string => d !== undefined).sort((a, b) => a.localeCompare(b))[0]
+
+  return {
+    ...cache,
+    lastComputedDate: added.length > 0 ? today : cache?.lastComputedDate,
+    firstSessionDate: first,
+    dailyActivity: [...(cache?.dailyActivity ?? []), ...added.filter(([, e]) => e.activity.sessionCount > 0).map(([, e]) => e.activity)],
+    dailyModelTokens: [
+      ...(cache?.dailyModelTokens ?? []),
+      ...added.map(([day, e]) => ({ date: dateOf(day), tokensByModel: Object.fromEntries(e.models) })),
+    ],
+    modelUsage: usage,
+    hourCounts: hours,
+  }
 }
 
 export const RANGES = [
@@ -56,6 +151,7 @@ export const dateOf = (day: number) => new Date(day * DAY).toISOString().slice(0
 // claude-opus-5-5 → Opus 5.5. Ein Datum am Ende (-20251001) und ein Zusatz wie [1m]
 // fallen weg, ältere IDs mit der Version vorn (claude-3-5-sonnet) lesen sich genauso.
 export function modelName(id: string): string {
+  if (id === UNTRACKED) return 'Untracked'
   const parts = id
     .replace(/^claude-/, '')
     .replace(/\[.*\]$/, '')
@@ -96,7 +192,7 @@ export function summarize(cache: StatsCache, today: string, days: number | null)
       tokens += count
     }
   }
-  const favorite = [...models.entries()].sort((a, b) => b[1] - a[1])[0]
+  const favorite = [...models.entries()].filter(([model]) => model !== UNTRACKED).sort((a, b) => b[1] - a[1])[0]
 
   const active = new Set(activity.map(entry => dayNumber(entry.date)))
   active.add(last)

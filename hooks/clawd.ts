@@ -310,14 +310,16 @@ export function terminalScene(scene: Scene, room: number, reach: number): Termin
 // Pixel wie die Krabben der Clawd-Crew, gezeichnet in 60 × 27, angezeigt gut 1,3-fach.
 export const SCENE_VIEW = { x: 0, y: 3, width: 60, height: 27 }
 export const SCENE_SVG = { width: 80, height: 36 }
-// In der Leiste der Apps steht die Szene 1,5-fach (90 × 41): auf Retina drei Gerätepixel je
-// Szenenpixel, also scharf, und groß genug, dass man Clawd erkennt. Die halbe Zeile, die 40,5 px
-// zu 41 fehlt, bleibt unten frei (preserveAspectRatio oben bündig), damit nichts verschwimmt.
-// Wird es eng, steht er 1-fach (60 × 27), gestapelt immer 1-fach, damit die Leiste flach bleibt.
+// In der Leiste der Apps steht die Szene 2-fach (120 × 54): auf Retina vier Gerätepixel je
+// Szenenpixel, also scharf, und groß genug, dass man Clawd gut erkennt. Wird es eng, steht er
+// 1,5-fach (90 × 41; die halbe Zeile zu 41 bleibt unten frei, preserveAspectRatio oben bündig),
+// gestapelt immer 1,5-fach, damit die Leiste flach bleibt.
 // Ein engerer Ausschnitt ginge nicht: Sonnenschirm, Dampf und Noten reichen bis an den Rand.
 export const appScene = (scale: number) => ({ width: SCENE_VIEW.width * scale, height: Math.ceil(SCENE_VIEW.height * scale) })
-export const APP_SCENE = appScene(1.5)
-export const APP_SCENE_FLAT = appScene(1)
+export const APP_LARGE = 2
+export const APP_SMALL = 1.5
+export const APP_SCENE = appScene(APP_LARGE)
+export const APP_SCENE_FLAT = appScene(APP_SMALL)
 // `isLight`: auf hellem Grund bekommen Weißes (Dampf, Becken) Kontur und Ton.
 export type SceneColors = { suggestion: string; gray: string; isLight?: boolean }
 const INK = {

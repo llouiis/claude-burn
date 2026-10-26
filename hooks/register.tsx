@@ -15,6 +15,8 @@ import type { Ledger } from './ledger'
 import type { Series } from './chart'
 import {
   appScene,
+  APP_LARGE,
+  APP_SMALL,
   PIXEL_GRID,
   scenePixels,
   FLOWS,
@@ -119,9 +121,9 @@ const appText = (chars: number) => Math.ceil(chars * APP_TEXT_CELL)
 // `xs` zwischen zweien in einer Zeile. So viele Zellen bleiben in der Leiste frei.
 const APP_SLACK = 3
 // Ohne Svg (VS Code) steht die Szene aus Box-Pixeln (scenePixels): Breite in ch, Höhe in lh
-// der Chat-Schrift dort (13 px: rund 8,2 px je ch, 18,2 je lh). Groß je 3 × 3 px wie das
-// 1,5-fache Svg (90 × 42 px), klein je 2 × 2 px wie das 1-fache.
-const APP_PIXEL = { large: { width: 0.37, height: 0.165 }, small: { width: 0.245, height: 0.11 } }
+// der Chat-Schrift dort (13 px: rund 8,2 px je ch, 18,2 je lh). Groß je 4 × 4 px wie das
+// 2-fache Svg (120 × 54 px), klein je 3 × 3 px wie das 1,5-fache.
+const APP_PIXEL = { large: { width: 0.488, height: 0.22 }, small: { width: 0.37, height: 0.165 } }
 const APP_CH_PX = 8.2
 const drip = atom({ plugin: 'burn', key: 'drip' } as const, 0)
 // -1 zugedreht, sonst die Stufe wie flowNow; Wasser zeigt die Szene nur, solange es läuft.
@@ -1887,7 +1889,7 @@ export const register: Register = on => {
     // VS Code: jede Pixelzeile eine Box, darin je Lauf gleicher Farbe eine Box (leer, wo nichts
     // ist). nowrap, sonst bräche VS Code eine Zeile um; so bleiben es rund 130 Knoten.
     const pixelPart = (scale: number) => {
-      const size = scale > 1 ? APP_PIXEL.large : APP_PIXEL.small
+      const size = scale > APP_SMALL ? APP_PIXEL.large : APP_PIXEL.small
       const across = (n: number) => Math.round(n * size.width * 1000) / 1000
 
       return (
@@ -1915,9 +1917,9 @@ export const register: Register = on => {
         </Box>
       )
     }
-    // In den Apps 1,5-fach oder, wenn es eng wird, 1-fach (siehe appPlan); in VS Code aus
+    // In den Apps 2-fach oder, wenn es eng wird, 1,5-fach (siehe appPlan); in VS Code aus
     // Box-Pixeln, groß oder klein.
-    const tapPart = (scale = 1.5) =>
+    const tapPart = (scale = APP_LARGE) =>
       !isTerminal && Svg !== undefined ? (
         <Svg
           key="hahn"
@@ -2018,11 +2020,11 @@ export const register: Register = on => {
       isStacked: boolean
     }
     const APP_STEPS = [
-      { scale: 1.5, withMoney: true, withLiters: true },
-      { scale: 1, withMoney: true, withLiters: true },
-      { scale: 1, withMoney: false, withLiters: true },
-      { scale: 1, withMoney: true, withLiters: false },
-      { scale: 1, withMoney: false, withLiters: false },
+      { scale: APP_LARGE, withMoney: true, withLiters: true },
+      { scale: APP_SMALL, withMoney: true, withLiters: true },
+      { scale: APP_SMALL, withMoney: false, withLiters: true },
+      { scale: APP_SMALL, withMoney: true, withLiters: false },
+      { scale: APP_SMALL, withMoney: false, withLiters: false },
       { scale: 0, withMoney: true, withLiters: false },
       { scale: 0, withMoney: false, withLiters: false },
     ] as const
@@ -2033,7 +2035,7 @@ export const register: Register = on => {
       (step.scale === 0
         ? 0
         : isTextApp
-          ? appCells(PIXEL_GRID.cols * (step.scale > 1 ? APP_PIXEL.large : APP_PIXEL.small).width * APP_CH_PX)
+          ? appCells(PIXEL_GRID.cols * (step.scale > APP_SMALL ? APP_PIXEL.large : APP_PIXEL.small).width * APP_CH_PX)
           : appCells(appScene(step.scale).width))
     const appPlan = (left: (detail: string | undefined) => number, details: string[]): AppPlan => {
       const options = [...details, undefined]
@@ -2042,7 +2044,7 @@ export const register: Register = on => {
 
         return at < 0 ? null : { detail: options[at], ...step, hasTap: step.scale > 0, isStacked: false }
       }
-      // Gestapelt steht Clawd 1-fach, damit die Leiste flach bleibt.
+      // Gestapelt steht Clawd klein, damit die Leiste flach bleibt.
       const stacked = (step: AppStep): AppPlan | null =>
         appLive(step) <= appRoom
           ? { detail: options.find(d => left(d) <= appRoom), ...step, hasTap: step.scale > 0, isStacked: true }
@@ -2053,7 +2055,7 @@ export const register: Register = on => {
       const isWhole = (step: AppStep) => step.withLiters && step.withMoney
       const plans = [
         ...withTap.filter(isWhole).map(inRow),
-        ...withTap.filter(step => step.scale === 1).map(stacked),
+        ...withTap.filter(step => step.scale === APP_SMALL).map(stacked),
         ...withTap.filter(step => !isWhole(step)).map(inRow),
         ...without.map(inRow),
         ...without.map(stacked),

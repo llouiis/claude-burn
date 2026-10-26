@@ -79,7 +79,7 @@ let breakdowns = 0
 const BREAKDOWN = {
   categories: [
     { name: 'System prompt', tokens: 3_000, color: 'promptBorder', isDeferred: false, kind: 'used' },
-    { name: 'Messages', tokens: 53_300, color: 'permission', isDeferred: false, kind: 'used' },
+    { name: 'Messages', tokens: 53_300, color: 'purple_FOR_SUBAGENTS_ONLY', isDeferred: false, kind: 'used' },
     { name: 'Free space', tokens: 110_700, color: 'promptBorder', isDeferred: false, kind: 'free' },
     { name: 'Autocompact buffer', tokens: 33_000, color: 'inactive', isDeferred: false, kind: 'buffer' },
   ],
@@ -545,6 +545,23 @@ test('Context breaks the window down like /context and the bar counts to auto-co
     expect(await has(ui, /Messages\s+53\.3k\s+26\.7%/)).toBe(true)
     expect(await has(ui, /^92%\sread/)).toBe(true)
     expect(await has(ui, /~\/\.claude\/CLAUDE\.md\s+1\.8k/)).toBe(true)
+    await ui.unmount()
+  }
+})
+
+test('the apps draw the subagent colours of /context as hex, the terminal keeps the theme name', async ($, on) => {
+  engine(on)
+  on('env.get', () => ({ value: '/Users/l' }))
+  mock.clock(on, { now: NOW })
+
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.session.measure(measure)
+  for (const surface of ['terminal', 'desktop', 'vscode'] as const) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    await ui.press({ key: 'tab-3' })
+    const drawn = JSON.stringify(await ui.drawn())
+    expect(drawn.includes('purple_FOR_SUBAGENTS_ONLY')).toBe(surface === 'terminal')
+    expect(drawn.includes('#827DBD')).toBe(surface !== 'terminal')
     await ui.unmount()
   }
 })

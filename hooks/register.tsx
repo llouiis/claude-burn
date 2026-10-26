@@ -177,6 +177,20 @@ const PANE = 'statistik'
 const PANE_TITLE = 'Usage'
 const STATS_BUTTON = 'Usage'
 
+// /context färbt manche Kategorien (Messages, MCP) mit den Subagent-Farben des Themes. Die Apps
+// kennen diese Namen nicht und lassen sie ungefärbt; dort stehen sie als Hex wie im Standard-Theme.
+const SUBAGENT_HEX: Record<string, string> = {
+  red_FOR_SUBAGENTS_ONLY: '#DC2626',
+  blue_FOR_SUBAGENTS_ONLY: '#6A9BCC',
+  green_FOR_SUBAGENTS_ONLY: '#16A34A',
+  yellow_FOR_SUBAGENTS_ONLY: '#CA8A04',
+  purple_FOR_SUBAGENTS_ONLY: '#827DBD',
+  orange_FOR_SUBAGENTS_ONLY: '#D97757',
+  pink_FOR_SUBAGENTS_ONLY: '#C46686',
+  cyan_FOR_SUBAGENTS_ONLY: '#0891B2',
+}
+const appColor = (color: string) => SUBAGENT_HEX[color] ?? color
+
 // Hex nur für die Svg der Apps, die keine Theme-Farben kennen; Text nimmt die Theme-Farben wie /usage.
 // Orange wie /usage, Grau für Achsen und Beschriftung, die Balkenfarben wie barColor.
 const PALETTE = {
@@ -1187,7 +1201,7 @@ export const register: Register = on => {
             <Box
               width={c.cells}
               height={isBoxApp ? 0.5 : 1}
-              backgroundColor={c.kind === 'used' ? c.color : c.kind === 'buffer' ? 'inactive' : 'subtle'}
+              backgroundColor={c.kind === 'used' ? appColor(c.color) : c.kind === 'buffer' ? 'inactive' : 'subtle'}
             />
           ))}
         </Box>
@@ -1253,7 +1267,7 @@ export const register: Register = on => {
           {shown.map(c =>
             row(
               c.kind === 'used' ? (
-                <Text color={c.color}>●</Text>
+                <Text color={isApp ? appColor(c.color) : c.color}>●</Text>
               ) : (
                 <Text dimColor>{c.kind === 'buffer' ? '◐' : '○'}</Text>
               ),

@@ -464,7 +464,8 @@ function faucetSvg(scene: Scene, colors: SceneColors, isOpen: boolean): string {
 // Dusche: hinten das Rohr mit rotem Drehknopf, oben der Brausekopf über Clawd, unten die
 // Duschwanne. Das Wasser prasselt auf seinen Kopf und rinnt an ihm herab; er tippt weiter.
 // Der Dampf wird mit der Sitzung dichter, bis Clawd fast verschwindet.
-const BRAUSE = { left: 11, right: 25, y: 5 }
+// Der Brausekopf hängt oben am Rand (y 3 bis 4,2), mit Luft bis zu Clawds Kopf (y 6).
+const BRAUSE = { left: 11, right: 25, y: 4.2 }
 function showerBackSvg(colors: SceneColors): string {
   return (
     crisp(
@@ -701,7 +702,7 @@ export function scenePixels(scene: Scene, colors: SceneColors): Pixels {
     // Rohr, Brausekopf, Duschwanne; der Dampf zieht hinter Clawd, das Gesicht bleibt frei.
     p.rect(36, 3, 1.6, GROUND - 3, INK.concrete, 3)
     p.rect(18, 3, 19.6, 1.2, INK.concreteTop, 3)
-    p.rect(BRAUSE.left, 3.8, BRAUSE.right - BRAUSE.left, 1.2, INK.concreteTop, 3)
+    p.rect(BRAUSE.left, BRAUSE.y - 1.2, BRAUSE.right - BRAUSE.left, 1.2, INK.concreteTop, 3)
     p.rect(0.5, GROUND - 1, 38, 1, isLight ? INK.concrete : TOWEL, 3)
     p.oval(36.8, 16, 1.3, 1.3, INK.red, 2)
     const puff = isLight ? INK.concrete : '#FFFFFF'

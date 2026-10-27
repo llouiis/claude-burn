@@ -59,6 +59,8 @@ Seit 0.23.0 gibt es am Hahn kein Waschbecken mehr: Ein Rohr kommt von oben, das 
 
 Seit 0.24.0 sieht Clawd in den Apps aus wie im Logo von Claude Code: breiter Körper, hohe schmale Augen, Ärmchen seitlich, vier dünne Beine. Er hält einen Laptop vor sich und tippt, solange Claude arbeitet, mit abwechselnd hochschnellenden Ärmchen und im Tempo der Tokens pro Sekunde; das Display glimmt dabei. Hocker, Liegestuhl, Sonnenschirm, Duschhaube und Singen gibt es nicht mehr: er arbeitet, während das Wasser läuft. Der Strahl am Hahn ist stufenlos so dick wie die Liter pro Sekunde (45 ml je 400 Tokens). Im Terminal bleibt Clawd Text wie bisher, nur ohne Möbel und Haube.
 
+Seit 0.24.1 hängt der Brausekopf ganz oben, ein Stück über Clawds Kopf; dazwischen sieht man den Strahl.
+
 `/tokenstats` liest für die Statistik Claude Codes `/stats`-Zwischenspeicher. Den schreibt Claude Code aber nur neu, wenn `/stats` im Terminal läuft; wer in der Desktop-App oder in VS Code arbeitet, sah dort alte Zahlen. Seit 0.19.0 führt Burn deshalb ein eigenes Tagebuch je Unterhaltung und zählt alle Tage nach dem letzten Rechentag des Zwischenspeichers selbst: Tokens je Modell, Messages, Tool-Calls, Sitzungen und Startstunden. Messages zählt Burn wie die Zeilen im Transkript (Prompts, Antwortblöcke, Tool-Ergebnisse); Anhänge und Systemzeilen, die `/stats` mitzählt, sieht der Mod nicht, deshalb liegt der Wert etwas darunter. Tokens, die Burn vor 0.19.0 nur im Stundenbuch gezählt hat, stehen ohne Modell als „Untracked“.
 
 Seit 0.16.0 merkt sich der Mod die Tokens jeder Unterhaltung: Setzt du eine Sitzung fort, passen Preis und Tokens zusammen. Seit 0.17.1 zählen auch die Tokens eines `/compact` mit, dessen Preis schon immer drin war.

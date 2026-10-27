@@ -1923,6 +1923,7 @@ export const register: Register = on => {
       arrival: arrivalAt,
       mlPerSecond: await read($, mlps),
       keys: await read($, keys),
+      ml: sessionOut * ML_PER_TOKEN,
     }
     const tapColors = !isTerminal && (await read($, isLight)) ? PALETTE.light : PALETTE.dark
     const isTall = isTerminal && e.props.maxRows >= 3

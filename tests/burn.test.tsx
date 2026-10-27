@@ -2,7 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 import { axisLabel } from '../hooks/chart'
-import { FLOWS, ML_PER_TOKEN, ROLES, lidOf, literText, piecesText, sceneAlt, sceneSvg, tapLevel, terminalScene } from '../hooks/clawd'
+import { FLOWS, ML_PER_TOKEN, ROLES, jugOf, lidOf, literText, piecesText, sceneAlt, sceneSvg, tapLevel, terminalScene } from '../hooks/clawd'
 import type { Scene } from '../hooks/clawd'
 import { addTo, allOutput, costFrom, liveTotals } from '../hooks/ledger'
 import { addToBook, dayNumber, modelName, summarize, withBooks } from '../hooks/stats'
@@ -828,7 +828,8 @@ test('every job draws in the terminal and in the apps, and tempo and size change
     ]
     // Am Hahn wächst die Pfütze: trocken, dann breiter ab 1, 5 und 20 L; im Terminal ist sie nur da.
     const levels = role === 'tap' ? [0, 2, 3, 4] : [0, 3, 6, 10]
-    const sizes = (draw: (scene: Scene) => string) => levels.map(level => draw({ ...rest, level }))
+    // Am Wasserspender leert sich dazu der Ballon mit den Litern.
+    const sizes = (draw: (scene: Scene) => string) => levels.map(level => draw({ ...rest, level, ml: level * 1_200 }))
     for (const draw of [text, (scene: Scene) => sceneSvg(scene, colors)]) {
       expect({ role, tempo: new Set(pictures(draw)).size }).toEqual({ role, tempo: 5 })
       expect({ role, size: new Set(sizes(draw)).size }).toEqual({ role, size: role === 'tap' && draw === text ? 2 : 4 })
@@ -858,9 +859,10 @@ test('in the light theme the white things get a contour; the dark theme stays as
   }
   const shower = sceneSvg({ role: 'shower', water: null, strength: 0, tick: 0, level: 10, arrival: -1 }, light)
   expect(shower).not.toContain('fill="#FFFFFF" fill-opacity')
-  // Am Hahn gibt es kein Becken mehr, nur die Pfütze in der Farbe des Wassers.
+  // Am Wasserspender ist der Ständer grau statt weiß, das Wasser im Ballon in der Farbe des Themas.
   const tap = sceneSvg({ role: 'tap', water: null, strength: 0, tick: 0, level: 1, arrival: -1 }, light)
-  expect(tap).toMatch(/<ellipse cx="44" cy="[\d.]+" rx="4.5" ry="1" fill="#5769F7"/)
+  expect(tap).toContain('width="10" height="9" fill="#A9A7A0"')
+  expect(tap).toContain('fill="#5769F7" fill-opacity="0.85"')
 })
 
 test('while Claude works Clawd types: the arms take turns and the screen glows', () => {
@@ -885,15 +887,23 @@ test('while Claude works Clawd types: the arms take turns and the screen glows',
   }
 })
 
-test('the jet at the tap is as thick as the liters per second', () => {
+test('the water in the hose is as thick as the liters per second, and the jug empties liter by liter', () => {
   const colors = { suggestion: '#B1B9F9', gray: '#B0AEA5' }
   const width = (mlPerSecond: number) => {
     const svg = sceneSvg({ role: 'tap', water: FLOWS[2]?.[0] ?? null, strength: 2, tick: 0, level: 1, arrival: -1, mlPerSecond }, colors)
-    return Number(/<path d="M44 13 L44 [\d.]+" [^>]*stroke-width="([\d.]+)"/.exec(svg)?.[1])
+    return Number(/<path d="M45 22.5 [^"]*" fill="none" stroke="#B1B9F9" stroke-width="([\d.]+)"/.exec(svg)?.[1])
   }
   expect(width(5)).toBeLessThan(width(15))
   expect(width(15)).toBeLessThan(width(30))
-  expect(width(1_000)).toBe(3.5)
+  expect(width(1_000)).toBe(1.35)
+  // Ohne Arbeit fließt nichts durch den Schlauch, und über dem Laptop dampft es nicht.
+  const still = sceneSvg({ role: 'tap', water: null, strength: 0, tick: 0, level: 1, arrival: -1 }, colors)
+  expect(still).not.toContain('stroke="#B1B9F9" stroke-width')
+  expect(still).not.toMatch(/<circle [^>]*fill-opacity="0.4"/)
+  expect(jugOf(0)).toEqual({ fill: 1, empties: 0 })
+  expect(jugOf(250)).toEqual({ fill: 0.75, empties: 0 })
+  expect(jugOf(2_500)).toEqual({ fill: 0.5, empties: 2 })
+  expect(jugOf(99_000).empties).toBe(3)
 })
 
 test('the steam leaves Clawds face free, arrivals fade in at the edge', () => {
@@ -1169,11 +1179,11 @@ test('at the tap Clawd works while the water runs onto the floor, and the puddle
 
   const app = await $.ui.mount({ ...BAND, surface: 'desktop' })
   const svg = await svgOf(app)
-  expect(svg?.props.alt).toBe('Clawd at his laptop next to the tap')
-  // Der Laptop steht vor ihm, der Hebel am Hahn ist rot, die Pfütze ist so breit wie bei 20 L.
+  expect(svg?.props.alt).toBe('Clawd at his laptop next to the water cooler')
+  // Der Laptop steht vor ihm, am Spender sind die Hähne rot und blau; ab 3 L liegen drei leere Ballons daneben.
   expect(String(svg?.props.source)).toContain('stroke="#C9C7C0"')
   expect(String(svg?.props.source)).toContain('#C8372D')
-  expect(String(svg?.props.source)).toContain('rx="12" ry="1"')
+  expect(String(svg?.props.source).match(/width="3.4" height="2" fill="#7C9AB5"/g)?.length).toBe(3)
   expect(plain((await (app as unknown as Drawing).find({ type: 'Text', text: /≈/ }))?.text)).toMatch(/^ ≈ 2\d,\d L$/)
   await app.unmount()
 })
@@ -1254,7 +1264,7 @@ test('in the endless shower Clawd types while the water runs, and the steam thic
   await steamy.unmount()
 })
 
-test('idle, Clawd blinks; the tap leaks one drop per loop, in the shower soap bubbles rise and pop', async ($, on) => {
+test('idle, Clawd blinks; the water cooler gulps once per loop, in the shower soap bubbles rise and pop', async ($, on) => {
   engine(on)
   const clock = mock.clock(on, { now: NOW })
 
@@ -1263,7 +1273,7 @@ test('idle, Clawd blinks; the tap leaks one drop per loop, in the shower soap bu
   await cast($, clock, 'hahn')
   const app = await $.ui.mount({ ...BAND, surface: 'desktop' })
   // Eine ganze Schleife von 15 s im Halbsekundentakt: die Bilder wechseln, mal blinzelt er, einmal
-  // fällt ein Tropfen aus dem Hahn.
+  // steigt eine Blase im Ballon des Wasserspenders auf.
   const sources = new Set<string>()
   let blinks = 0
   let drops = 0
@@ -1272,11 +1282,11 @@ test('idle, Clawd blinks; the tap leaks one drop per loop, in the shower soap bu
     const source = String((await svgOf(app))?.props.source)
     sources.add(source)
     if (source.includes('y="12" width="2" height="2" fill="#1F1E1D"') || source.includes('y="13" width="2" height="1" fill="#1F1E1D"')) blinks += 1
-    if (/<ellipse cx="44" cy="[\d.]+" rx="0.9" ry="1.2"/.test(source)) drops += 1
+    if (source.includes('r="0.55" fill="none" stroke="#FFFFFF"')) drops += 1
   }
   expect(sources.size).toBeGreaterThanOrEqual(5)
   expect(blinks).toBe(2)
-  expect(drops).toBe(3)
+  expect(drops).toBe(4)
   await app.unmount()
 
   await cast($, clock, 'dusche')

@@ -2,8 +2,9 @@
 // für die Tokens pro Sekunde (nur solange gestreamt wird) und die Größe für die Sitzung. Zu
 // Beginn und nach einer langen Pause kommt er erst an. Das Thema: KI verschwendet Wasser, jede
 // Antwort kostet ein paar Schlucke; unter jeder Szene stehen die Liter.
-//   Hahn:    Clawd dreht auf und tippt am Laptop, das Wasser läuft auf den Boden; die Pfütze
-//            wächst mit den Litern, der Strahl mit den Litern pro Sekunde.
+//   Hahn:    in den Apps ein Wasserspender: ein Schlauch führt zu Clawds Laptop, der beim
+//            Tippen dampft; der Ballon leert sich mit den Litern, leere liegen daneben. Im
+//            Terminal noch der Hahn, das Wasser läuft auf den Boden in eine Pfütze.
 //   Dusche:  Clawd tippt unter der Dauerdusche, der Dampf wird mit der Sitzung dichter.
 // Clawd sieht aus wie im Logo von Claude Code und tippt, solange Claude arbeitet.
 // Am Hahn kommt er nicht gelaufen: wie beim Start von Claude Code steht er da, klappt den
@@ -17,7 +18,7 @@ export const ROLES = ['tap', 'shower'] as const
 export type Role = (typeof ROLES)[number]
 // Für /clawd: englisch wie die Leiste, die deutschen Wörter gehen auch.
 export const ROLE_WORDS: Record<Role, string[]> = {
-  tap: ['tap', 'hahn', 'wasserhahn', 'abfluss', 'drain', 'handy', 'phone'],
+  tap: ['tap', 'hahn', 'wasserhahn', 'spender', 'wasserspender', 'cooler', 'abfluss', 'drain', 'handy', 'phone'],
   shower: ['shower', 'dusche', 'duschen', 'brause', 'singen', 'sing'],
 }
 
@@ -82,6 +83,8 @@ export type Scene = {
   mlPerSecond?: number
   // Anschläge auf der Tastatur, im Tempo der Tokens pro Sekunde; fehlt er, tippt er im Takt des Wassers
   keys?: number
+  // Am Wasserspender die Milliliter der Sitzung: so weit ist der Ballon leer, so viele liegen daneben
+  ml?: number
 }
 // Der Strahl am Hahn wächst stufenlos mit den Litern pro Sekunde: 4,5 ml/s (40 Tokens/s) sind
 // knapp 1 Einheit, 22,5 ml/s (200) rund 2, ab gut 40 ml/s 3,5. Ohne Messung wie die Stärke.
@@ -482,65 +485,71 @@ const poseOf = (scene: Scene): Pose => {
 const splashSvg = (x: number, y: number, colors: SceneColors) =>
   `<ellipse cx="${x}" cy="${y}" rx="2.5" ry="0.9" fill="none" stroke="${colors.suggestion}" stroke-opacity="0.6" stroke-width="0.7"/><circle cx="${x - 1.5}" cy="${y - 2}" r="0.6" fill="${colors.suggestion}" fill-opacity="0.7"/><circle cx="${x + 1.5}" cy="${y - 2.5}" r="0.6" fill="${colors.suggestion}" fill-opacity="0.7"/>`
 
-// Hahn: ein Rohr kommt von oben, der Hahn mit rotem Hebel. Kein Becken: das Wasser läuft
-// ungenutzt auf den Boden, und die Pfütze dort wächst mit den verschwendeten Litern.
-const SPOUT = { x: 44, y: 13 }
-const FLOOR = { x: 44, y: GROUND - 0.8 }
-// Halbe Breite der Pfütze je Stufe (tapLevel): nass, sobald etwas lief, dann ab 1, 5 und 20 L.
-const PUDDLE = [2, 4.5, 7, 9.5, 12]
-const puddleOf = (level: number) => PUDDLE[Math.max(0, Math.min(PUDDLE.length - 1, level))] ?? 2
-function faucetSvg(scene: Scene, colors: SceneColors, isOpen: boolean): string {
-  const { water, strength, tick, level } = scene
-  const wet = `fill="${colors.suggestion}"`
-  const lever = isOpen
-    ? `<path d="M50.2 9.6 L53.4 6.4" stroke="${INK.red}" stroke-width="1.3" stroke-linecap="round"/>`
-    : `<path d="M50.2 8.6 L54.4 8.6" stroke="${INK.red}" stroke-width="1.3" stroke-linecap="round"/>`
-  const pipe = crisp(
-    [
-      px(49, 3, 2.4, 7, INK.concrete),
-      px(48.2, 3, 4, 1, INK.concreteTop),
-      px(43, 9.6, 8.4, 2, INK.concreteTop),
-      px(43, 11.6, 2, 1.4, INK.concreteTop),
-    ].join(''),
-  )
-  // Die Pfütze: ein flacher See auf dem Boden, vorn heller, wo das Licht glänzt.
-  const r = puddleOf(level)
-  const puddle =
-    level > 0 || water !== null
-      ? `<ellipse cx="${FLOOR.x}" cy="${FLOOR.y}" rx="${r}" ry="1" ${wet} fill-opacity="0.55"/>` +
-        `<ellipse cx="${FLOOR.x - r * 0.3}" cy="${FLOOR.y - 0.2}" rx="${(r * 0.35).toFixed(2)}" ry="0.3" fill="#FFFFFF" fill-opacity="0.35"/>`
-      : ''
-  let stream = ''
-  if (water !== null) {
-    if (water.drop !== null) {
-      const y = SPOUT.y + 1 + ((FLOOR.y - SPOUT.y - 2) * water.drop) / 2
-      stream = `<ellipse cx="${SPOUT.x}" cy="${y.toFixed(1)}" rx="0.9" ry="1.2" ${wet} fill-opacity="0.9"/>`
-    } else if (water.isSplash && water.jet === 0) {
-      stream = splashSvg(SPOUT.x, FLOOR.y, colors)
-    }
-    if (water.jet > 0) {
-      const width = jetWidth(scene)
-      stream =
-        `<path d="M${SPOUT.x} ${SPOUT.y} L${SPOUT.x} ${FLOOR.y}" stroke="${colors.suggestion}" stroke-opacity="0.85" stroke-width="${width}" stroke-dasharray="${strength === 3 ? '3 0.8' : '2 1.2'}" stroke-dashoffset="${-(tick % 4) * 0.9}"/>` +
-        // Wo der Strahl aufschlägt, laufen Ringe durch die Pfütze, beim starken Strahl ein zweiter.
-        [3, ...(strength === 3 ? [5.5] : [])]
-          .map(
-            (r, i) =>
-              `<ellipse cx="${FLOOR.x}" cy="${FLOOR.y}" rx="${r}" ry="${(r * 0.28).toFixed(2)}" fill="none" stroke="${colors.suggestion}" stroke-opacity="${0.75 - i * 0.25}" stroke-width="0.6" stroke-dasharray="2.2 1.4" stroke-dashoffset="${((tick + i) % 4) * (i === 0 ? 0.9 : -0.9)}"/>`,
-          )
-          .join('')
-      if (strength === 3) {
-        const up = tick % 2 === 0 ? 0 : 1.2
-        stream += [[-3, -2.5], [3, -2], [-1.5, -4]]
-          .map(([dx, dy]) => `<circle cx="${FLOOR.x + (dx ?? 0)}" cy="${(FLOOR.y + (dy ?? 0) - up).toFixed(1)}" r="0.5" ${wet} fill-opacity="0.85"/>`)
-          .join('')
-      }
-    }
-  }
+// Wasserspender (die Rolle heißt intern weiter `tap`): rechts steht ein Spender mit einem
+// Ballon zu JUG_ML, ein Schlauch führt am Boden zu Clawds Laptop. Solange Claude arbeitet,
+// fließt das Wasser durch den Schlauch, im Ballon steigen Blasen auf, und über dem Laptop
+// verdampft es wie im Rechenzentrum. Der Ballon leert sich mit den Litern der Sitzung; ist er
+// leer, kommt ein voller, und der leere liegt daneben (höchstens drei).
+export const JUG_ML = 1_000
+export const jugOf = (ml: number) => ({ fill: 1 - (Math.max(0, ml) % JUG_ML) / JUG_ML, empties: Math.min(3, Math.floor(Math.max(0, ml) / JUG_ML)) })
+const JUG = { x: 46, y: 4, width: 8, height: 12 }
+const standOf = (isLight: boolean): Shape[] => [
+  [45, 17, 10, 9, isLight ? INK.concreteTop : INK.silver],
+  [45, 17, 10, 1, INK.concrete],
+  [44, 25.4, 12, 0.6, INK.concrete],
+  [48.5, 16, 3, 1, INK.concrete],
+  [46.5, 19.5, 1.6, 1.2, INK.denim],
+  [51.9, 19.5, 1.6, 1.2, INK.red],
+]
+// Leere Ballons liegen rechts vom Spender übereinander, der Hals zeigt nach außen.
+const emptiesOf = (n: number): Shape[] =>
+  Array.from({ length: n }, (_, i): Shape[] => [[55.6, 23.6 - i * 2.2, 3.4, 2, INK.glassEdge], [59, 24.1 - i * 2.2, 0.8, 1, INK.glassEdge]]).flat()
+// Der Schlauch: vom Spender schräg hinab, vor Clawds Füßen am Boden entlang und von hinten in
+// den Laptop. Durchsichtig bläulich, damit er sich vom grauen Unterteil abhebt.
+const HOSE: [number, number][] = [[45, 22.5], [42, 26.6], [18.5, 26.6], [17, 25.4]]
+const HOSE_COLOR = INK.glassEdge
+const hosePath = HOSE.map(([x, y], i) => `${i === 0 ? 'M' : 'L'}${x} ${y}`).join(' ')
+// So dick fließt es im Schlauch, mit den Litern pro Sekunde.
+export const hoseWidth = (scene: Scene) => Math.round((0.3 + jetWidth(scene) * 0.3) * 100) / 100
+// Die Blasen im Ballon: je Stärke eine mehr; sie steigen bis an den Wasserspiegel.
+function jugBubbles(scene: Scene, top: number): { x: number; y: number }[] {
+  const isFlowing = scene.water !== null && (scene.idle ?? -1) < 0
+  const idle = scene.idle ?? -1
+  const list = isFlowing
+    ? Array.from({ length: scene.strength + 1 }, (_, k) => ({ x: 48 + (k % 3) * 1.8, y: 15.4 - ((scene.tick + k * 3) % 8) * 1.4 }))
+    : idle >= 12 && idle <= 15
+      ? [{ x: 50, y: 15.4 - (idle - 12) * 2 }]
+      : []
 
-  return puddle + pipe + lever + stream
+  return list.filter(b => b.y > top + 0.6)
 }
+// Der Dampf über dem Laptop: je Stärke eine Schwade mehr, sie steigen auf.
+const VAPOR: [number, number, number][] = [[4, 15, 1.4], [2.5, 11.5, 2], [5, 8, 2.4], [2.4, 5.4, 2.6]]
+const vaporOf = (scene: Scene) =>
+  scene.water !== null && (scene.idle ?? -1) < 0 ? VAPOR.slice(0, scene.strength + 1).map(([x, y, r]): [number, number, number] => [x, y - (scene.tick % 3) * 0.7, r]) : []
+const isFlowingIn = (scene: Scene) => scene.water !== null && (scene.idle ?? -1) < 0
 
+function coolerSvg(scene: Scene, colors: SceneColors): { back: string; front: string } {
+  const isLight = colors.isLight === true
+  const { fill, empties } = jugOf(scene.ml ?? 0)
+  const top = JUG.y + JUG.height * (1 - fill)
+  const hose = `<path d="${hosePath}" fill="none" stroke="${HOSE_COLOR}" stroke-width="1.1" stroke-linejoin="round"/>`
+  const flow = isFlowingIn(scene)
+    ? `<path d="${hosePath}" fill="none" stroke="${colors.suggestion}" stroke-width="${hoseWidth(scene)}" stroke-dasharray="1.4 0.8" stroke-dashoffset="${(-(scene.tick % 4) * 0.55).toFixed(2)}"/>`
+    : ''
+  const jug =
+    crisp(pxOf([...standOf(isLight), ...emptiesOf(empties)])) +
+    `<rect x="${JUG.x}" y="${JUG.y}" width="${JUG.width}" height="${JUG.height}" rx="1.5" fill="${INK.glass}" fill-opacity="0.3"/>` +
+    (fill > 0 ? `<rect x="${JUG.x}" y="${Math.round(top * 100) / 100}" width="${JUG.width}" height="${Math.round((JUG.y + JUG.height - top) * 100) / 100}" fill="${colors.suggestion}" fill-opacity="0.85"/>` : '') +
+    `<rect x="${JUG.x}" y="${JUG.y}" width="${JUG.width}" height="${JUG.height}" rx="1.5" fill="none" stroke="${INK.glassEdge}" stroke-width="0.4"/>` +
+    jugBubbles(scene, top).map(({ x, y }) => `<circle cx="${x}" cy="${y.toFixed(1)}" r="0.55" fill="none" stroke="#FFFFFF" stroke-width="0.3"/>`).join('')
+  const puff = isLight ? INK.concrete : '#FFFFFF'
+  const vapor = vaporOf(scene)
+    .map(([x, y, r]) => `<circle cx="${x}" cy="${y.toFixed(1)}" r="${r}" fill="${puff}" fill-opacity="0.4"/>`)
+    .join('')
+
+  return { back: hose + flow + jug, front: vapor }
+}
 
 // Dusche: hinten das Rohr mit rotem Drehknopf, oben der Brausekopf über Clawd, unten die
 // Duschwanne. Das Wasser prasselt auf seinen Kopf und rinnt an ihm herab; er tippt weiter.
@@ -620,7 +629,9 @@ export function sceneSvg(scene: Scene, colors: SceneColors): string {
 
   // Hinten und vorn die Szene, dazwischen Clawd.
   if (role === 'tap') {
-    back.push(faucetSvg({ ...scene, water: isHere ? water : null }, colors, isTapOpen(arrival)))
+    const cooler = coolerSvg({ ...scene, water: isHere ? water : null }, colors)
+    back.push(cooler.back)
+    front.push(cooler.front)
   } else {
     back.push(showerBackSvg(colors))
     front.push(showerSvg(scene, colors, isHere))
@@ -741,7 +752,7 @@ function painter() {
 }
 
 export function scenePixels(scene: Scene, colors: SceneColors): Pixels {
-  const { role, water, strength, tick, level, arrival } = scene
+  const { role, water, tick, level, arrival } = scene
   const isHere = arrival < 0
   const isOn = isHere && water !== null
   const isLight = colors.isLight === true
@@ -753,36 +764,26 @@ export function scenePixels(scene: Scene, colors: SceneColors): Pixels {
   const step = arrival >= 0 && walked < 1 ? arrival : 0
   const walkIn = (draw: () => void) => p.within(moved(-32 * (1 - walked), 0), draw)
 
-  // Wasser senkrecht von `from` bis `to`: ein Tropfen, ein wandernder Strahl oder ein Spritzer.
-  const fall = (x: number, from: number, to: number) => {
-    if (!isOn || water === null) return
-    if (water.drop !== null) {
-      p.rect(x - 1, from + 1 + ((to - from - 2) * water.drop) / 2, 2, 2, wet, 3)
-    } else if (water.jet > 0) {
-      // So dick wie in der Svg, mindestens aber so, dass er eine Zelle trifft.
-      const width = Math.max(1.4, jetWidth(scene))
-      for (let y = from; y < to; y += 2) {
-        if ((Math.round(y / 2) + tick) % 3 !== 0) p.rect(x - width / 2, y, width, 2, wet, 2)
-      }
-    } else if (water.isSplash) {
-      p.rect(x - 3, to - 1, 6, 1.4, wet, 2)
-    }
-  }
-
   if (role === 'tap') {
-    // Das Rohr von oben, der Hahn mit rotem Hebel, darunter die Pfütze.
-    if (level > 0 || isOn) p.rect(FLOOR.x - puddleOf(level), FLOOR.y - 0.8, 2 * puddleOf(level), 1.6, withAlpha(wet, 0.6), 3)
-    p.rect(49, 3, 2.4, 7, INK.concrete, 3)
-    p.rect(43, 9.6, 8.4, 2, INK.concreteTop, 3)
-    p.rect(43, 11.6, 2, 1.4, INK.concreteTop, 3)
-    if (isTapOpen(arrival)) p.line(50.2, 9.6, 53.4, 6.4, 1.3, INK.red)
-    else p.line(50.2, 8.6, 54.4, 8.6, 1.3, INK.red)
-    fall(SPOUT.x, SPOUT.y, FLOOR.y)
+    // Schlauch, Spender mit Ballon und leere Ballons; wie in der Svg.
+    const seen = { ...scene, water: isHere ? water : null }
+    const { fill, empties } = jugOf(scene.ml ?? 0)
+    const top = JUG.y + JUG.height * (1 - fill)
+    HOSE.slice(1).forEach(([x, y], i) => {
+      const [fx, fy] = HOSE[i] ?? [x, y]
+      p.line(fx, fy, x, y, 1.1, HOSE_COLOR)
+    })
+    if (isFlowingIn(seen)) for (let x = 18 + (tick % 3); x < 42; x += 3) p.rect(x, 25.8, 1.6, 1.6, wet, 2)
+    p.shapes([...standOf(isLight), ...emptiesOf(empties)], 3)
+    p.rect(JUG.x, JUG.y, JUG.width, JUG.height, withAlpha(INK.glass, 0.35), 3)
+    if (fill > 0) p.rect(JUG.x, top, JUG.width, JUG.y + JUG.height - top, wet, 3)
+    for (const { x, y } of jugBubbles(seen, top)) p.rect(x - 0.8, y - 0.8, 1.6, 1.6, withAlpha('#FFFFFF', 0.8), 3)
     // Am Hahn steht er schon da, von der Seite, und klappt den Laptop auf.
     const pose = poseOf(scene)
     const lidAt = lidLine(pose.lid ?? 1)
     p.line(lidAt.x1, lidAt.y1, lidAt.x2, lidAt.y2, 1.3, pose.isLit === true ? SCREEN : LID_GRAY)
     p.shapes([BASE, ...sideClawdShapes(pose)])
+    for (const [x, y, r] of vaporOf(seen)) p.oval(x, y, r, r, withAlpha(isLight ? INK.concrete : '#FFFFFF', 0.3))
   } else {
     // Rohr, Brausekopf, Duschwanne; der Dampf zieht hinter Clawd, das Gesicht bleibt frei.
     p.rect(36, 3, 1.6, GROUND - 3, INK.concrete, 3)
@@ -818,15 +819,15 @@ export function scenePixels(scene: Scene, colors: SceneColors): Pixels {
 }
 
 export function sceneAlt(scene: Scene): string {
-  const { role, water, arrival, level } = scene
+  const { role, arrival, level } = scene
   const isWorking = typingOf(scene) >= 0
   if (arrival >= 0) {
     if (role === 'shower') return 'Clawd walking in with his laptop and a towel'
     return isWorking ? 'Clawd typing fast on his laptop' : 'Clawd opening his laptop'
   }
   if (role === 'tap') {
-    if (isWorking) return `Clawd typing fast on his laptop while the tap ${scene.strength >= 2 ? 'runs' : 'drips'} onto the floor`
-    return water !== null ? 'Clawd at his laptop, the tap drips onto the floor' : 'Clawd at his laptop next to the tap'
+    if (isWorking) return 'Clawd typing fast on his laptop, which drinks from the water cooler and steams'
+    return 'Clawd at his laptop next to the water cooler'
   }
   const steam = level >= 6 ? ' in thick steam' : ''
 

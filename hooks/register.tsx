@@ -28,6 +28,7 @@ import {
   idleDrip,
   SLOT,
   arrivalLength,
+  isWalking,
   isRestingAt,
   ML_PER_TOKEN,
   literText,
@@ -98,6 +99,11 @@ const DRIP_STEP = 50
 const DRIP_PER_SECOND = 100
 const dripSpeed = (rate: number) => (rate <= 0 ? 1 : Math.max(0.5, Math.min(3, rate / DRIP_PER_SECOND)))
 let dripPhase = 0
+// Clawd tippt im Tempo der Tokens pro Sekunde: je 10 Tokens ein Anschlag, mindestens 4 und
+// höchstens 20 je Sekunde, also einer je DRIP_STEP. Läuft das Wasser nur noch aus, tippt er langsam.
+const KEYS_PER_TOKEN = 0.1
+const keysPerSecond = (rate: number) => Math.max(4, Math.min(1000 / DRIP_STEP, rate * KEYS_PER_TOKEN))
+let keyPhase = 0
 // Ab so vielen Tokens pro Sekunde (geschätzt wie der Spinner, über RATE_WINDOW) eine Stufe mehr.
 const FLOW_AT = [40, 100, 200]
 const RATE_WINDOW = 2_000
@@ -153,6 +159,8 @@ const drip = atom({ plugin: 'burn', key: 'drip' } as const, 0)
 const flow = atom({ plugin: 'burn', key: 'flow' } as const, -1)
 // Milliliter pro Sekunde, auf 0,5 gerundet, damit nicht jede kleine Schwankung neu zeichnet.
 const mlps = atom({ plugin: 'burn', key: 'mlps' } as const, 0)
+// Die Anschläge auf Clawds Tastatur, siehe keysPerSecond.
+const keys = atom({ plugin: 'burn', key: 'keys' } as const, 0)
 let dripper: { cancel: () => void } | undefined
 // Die Rolle, einmal pro Sitzung ausgelost; /clawd wechselt sie von Hand.
 const role = atom({ plugin: 'burn', key: 'role' } as const, 0)
@@ -480,8 +488,14 @@ async function flowTick($: EngineInterface) {
     if (isDraining) await closeTap($)
     return
   }
+  const rate = rateAt(await $.clock.now())
+  keyPhase += (DRIP_STEP / 1000) * keysPerSecond(rate)
+  if (keyPhase >= 1) {
+    keyPhase -= Math.floor(keyPhase)
+    await update($, keys, i => i + 1)
+  }
   if (flowNow !== before) return
-  dripPhase += (DRIP_STEP / DRIP) * dripSpeed(rateAt(await $.clock.now()))
+  dripPhase += (DRIP_STEP / DRIP) * dripSpeed(rate)
   if (dripPhase < 1) return
   dripPhase -= 1
   // Ausgelaufen: der letzte Tropfen ist aufgeschlagen.
@@ -1908,6 +1922,7 @@ export const register: Register = on => {
       liters,
       arrival: arrivalAt,
       mlPerSecond: await read($, mlps),
+      keys: await read($, keys),
     }
     const tapColors = !isTerminal && (await read($, isLight)) ? PALETTE.light : PALETTE.dark
     const isTall = isTerminal && e.props.maxRows >= 3
@@ -1922,7 +1937,7 @@ export const register: Register = on => {
     const liveWidth =
       (liveMoney === '' ? 0 : liveMoney.length + ' · '.length) + liveArrow.length + liveValue.length + liveRest.length
     const reach = 1 + liveWidth
-    const lane = arrivalAt < 0 ? 0 : Math.max(0, Math.min(24, e.props.bodyColumns - 6 - TAP_WIDTH - reach))
+    const lane = !isWalking(roleAt, arrivalAt) ? 0 : Math.max(0, Math.min(24, e.props.bodyColumns - 6 - TAP_WIDTH - reach))
     const drawn = isTerminal ? terminalScene(scene, lane, reach) : null
     // VS Code: jede Pixelzeile eine Box, darin je Lauf gleicher Farbe eine Box (leer, wo nichts
     // ist). nowrap, sonst bräche VS Code eine Zeile um; so bleiben es rund 130 Knoten.

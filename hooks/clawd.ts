@@ -6,6 +6,8 @@
 //            wächst mit den Litern, der Strahl mit den Litern pro Sekunde.
 //   Dusche:  Clawd tippt unter der Dauerdusche, der Dampf wird mit der Sitzung dichter.
 // Clawd sieht aus wie im Logo von Claude Code und tippt, solange Claude arbeitet.
+// Am Hahn kommt er nicht gelaufen: wie beim Start von Claude Code steht er da, klappt den
+// Laptop auf und haut sofort in die Tasten, so schnell wie die Tokens pro Sekunde kommen.
 // Pool, Wanne und See gab es bis 0.18.0.
 
 export type Color = 'claude' | 'error' | 'warning' | 'suggestion' | 'inactive' | 'success'
@@ -53,6 +55,14 @@ export const sizeLevel = (n: number) => SIZE_AT.filter(at => n >= at).length
 // Die Anfahrt in Takten: Clawd läuft heran, dann dreht er in den Haltetakten auf.
 export const ARRIVE = { in: 10, hold: 4 }
 export const arrivalLength = (_role: Role) => ARRIVE.in + ARRIVE.hold
+// Am Hahn statt der Anfahrt: bis Takt `closed` liegt der Deckel zu, bis `open` geht er auf,
+// danach tippt Clawd; in den Haltetakten dreht er nebenbei den Hahn auf.
+export const LID = { closed: 2, open: 7 }
+// Wie weit der Deckel offen ist, 0 bis 1; angekommen ist er offen.
+export const lidOf = (arrival: number) =>
+  arrival < 0 ? 1 : Math.max(0, Math.min(1, (arrival - LID.closed) / (LID.open - LID.closed)))
+// Kommt Clawd zu Fuß? Am Hahn steht er schon da.
+export const isWalking = (role: Role, arrival: number) => arrival >= 0 && role !== 'tap'
 
 export type Scene = {
   role: Role
@@ -70,6 +80,8 @@ export type Scene = {
   liters?: string
   // Milliliter pro Sekunde, solange gestreamt wird: so dick ist der Strahl am Hahn
   mlPerSecond?: number
+  // Anschläge auf der Tastatur, im Tempo der Tokens pro Sekunde; fehlt er, tippt er im Takt des Wassers
+  keys?: number
 }
 // Der Strahl am Hahn wächst stufenlos mit den Litern pro Sekunde: 4,5 ml/s (40 Tokens/s) sind
 // knapp 1 Einheit, 22,5 ml/s (200) rund 2, ab gut 40 ml/s 3,5. Ohne Messung wie die Stärke.
@@ -170,14 +182,24 @@ const CARRIED: Record<Role, Piece> = {
 type Parts = { head: Cell[]; slots: Cell[][]; rights: Cell[][] }
 
 // Hahn: der Hahn hängt in der Leiste (Spalten 7 bis 9), das Wasser fällt in Spalte 8 auf den
-// Boden, wo eine Pfütze steht, sobald etwas lief. Clawd hält das Handy in Spalte 7 und sieht
-// nicht hin; er steht und arbeitet, statt es sich bequem zu machen.
+// Boden, wo eine Pfütze steht, sobald etwas lief. Clawd steht am Laptop in Spalte 7; beim
+// Ankommen klappt er ihn auf, dann tippt er, statt es sich bequem zu machen.
 export const isTapOpen = (arrival: number) => arrival < 0 || arrival > ARRIVE.in
+// Der Laptop im Terminal, wie weit er aufgeklappt ist: zu liegt er flach, offen leuchtet er.
+const LID_CELLS = ['▁', '▂', '▄', '▆', '▮']
+// Beim Tippen schnellt abwechselnd ein Ärmchen hoch.
+const TYPING_CLAWD = ['▗▛███▜▌', '▐▛███▜▖']
 function tapParts(scene: Scene): Parts {
-  const { water, strength, tick, level, arrival } = scene
+  const { water, strength, level, arrival } = scene
   const head = [...blank(7), ...cellsOf(isTapOpen(arrival) ? TAP_OPEN : TAP_SHUT), ...cellsOf(TAP)]
-  // Das Handy leuchtet; beim Scrollen flackert es ab und zu.
-  const top: Cell[] = [...cellsOf([{ text: '▐▛███▜▌', color: 'claude' }]), { ch: '▮', color: 'suggestion', dim: tick % 5 === 4 }, BLANK]
+  const typing = typingOf(scene)
+  const lid = lidOf(arrival)
+  const screen: Cell =
+    lid < 1
+      ? { ch: LID_CELLS[Math.floor(lid * (LID_CELLS.length - 1))] ?? '▁', color: 'inactive' }
+      : { ch: '▮', color: 'suggestion', dim: typing < 0 }
+  const top: Cell[] = [...cellsOf([{ text: TYPING_CLAWD[typing] ?? '▐▛███▜▌', color: 'claude' }]), screen, BLANK]
+  const { tick } = scene
   const low: Cell[] = cellsOf(LEGS).slice(0, 7)
   const right: Cell[] = []
   const puddle: Cell = level === 0 && water === null ? BLANK : { ch: '▁', color: 'suggestion', dim: true }
@@ -266,7 +288,7 @@ export function terminalScene(scene: Scene, room: number, reach: number): Termin
     rights = rowsAt.map(row => row.slice(room + SLOT))
   }
 
-  if (arrival >= 0) {
+  if (isWalking(role, arrival)) {
     // Zu Fuß: Clawd läuft von links an seinen Platz und trägt, was er braucht. Hahn, Rohre und
     // Becken (grau) warten schon in den Spalten 7 und 8; aufgedreht wird erst, wenn er da ist.
     const walked = Math.min(1, arrival / ARRIVE.in)
@@ -367,9 +389,11 @@ const TOWEL = '#F4F1EA'
 type Shape = [number, number, number, number, string]
 const pxOf = (shapes: Shape[]) => shapes.map(([x, y, w, h, c]) => px(x, y, w, h, c)).join('')
 // `step` hebt beim Gehen jedes zweite Bein; `typing` 0 oder 1 hebt beim Tippen abwechselnd ein
-// Ärmchen (-1 ruht); `isLit`: das Display leuchtet, die Oberkante des Deckels glimmt.
-type Pose = { step?: number; isBlink?: boolean; typing?: number; isLit?: boolean }
-function clawdShapes({ step = 0, isBlink = false, typing = -1 }: Pose): Shape[] {
+// Ärmchen (-1 ruht); `isLit`: das Display leuchtet, die Oberkante des Deckels glimmt; `lid`:
+// wie weit der Deckel offen ist (0 bis 1), dabei hebt er ihn mit beiden Ärmchen an.
+type Pose = { step?: number; isBlink?: boolean; typing?: number; isLit?: boolean; lid?: number }
+function clawdShapes({ step = 0, isBlink = false, typing = -1, lid = 1 }: Pose): Shape[] {
+  const isLifting = lid > 0 && lid < 1
   const lift = (i: number) => (step % 2 === 1 && i % 2 === 1 ? 2 : 0)
   const eyes: Shape[] = isBlink
     ? [[10, 12, 2, 2, INK.ink], [24, 12, 2, 2, INK.ink]]
@@ -377,25 +401,82 @@ function clawdShapes({ step = 0, isBlink = false, typing = -1 }: Pose): Shape[] 
 
   return [
     [6, 6, 24, 16, INK.clay],
-    [2, typing === 0 ? 11 : 14, 4, 4, INK.clay],
-    [30, typing === 1 ? 11 : 14, 4, 4, INK.clay],
+    [2, typing === 0 ? 11 : isLifting ? 12.5 : 14, 4, 4, INK.clay],
+    [30, typing === 1 ? 11 : isLifting ? 12.5 : 14, 4, 4, INK.clay],
     ...eyes,
     ...[8, 12, 22, 26].map((x, i): Shape => [x, 22, 2, 4 - lift(i), INK.clay]),
   ]
 }
 // Der Laptop, aufgeklappt vor ihm: von vorn sieht man den Deckel, darunter die Tastatur.
 const SCREEN = '#9FD8FF'
-const LAPTOP: Shape[] = [[10, 15.6, 16, 4.4, '#C9C7C0'], [8, 20, 20, 1.4, '#8D8B85']]
-const laptopOf = (pose: Pose): Shape[] => (pose.isLit === true ? [...LAPTOP, [10, 15.6, 16, 0.8, SCREEN]] : LAPTOP)
+// Beim Aufklappen wächst der Deckel von flach bis 4,4 hoch.
+function laptopOf({ lid = 1, isLit = false }: Pose): Shape[] {
+  const height = Math.round(Math.max(0.8, 4.4 * lid) * 10) / 10
+  const top = Math.round((20 - height) * 10) / 10
+  const shapes: Shape[] = [[10, top, 16, height, '#C9C7C0'], [8, 20, 20, 1.4, '#8D8B85']]
+
+  return isLit ? [...shapes, [10, top, 16, 0.8, SCREEN]] : shapes
+}
+const LAPTOP = laptopOf({})
 const clawdPx = (pose: Pose) => crisp(pxOf([...clawdShapes(pose), ...laptopOf(pose)]))
+
+// Am Hahn steht Clawd wie im Startbild von Claude Code: halb von der Seite, nach links gewandt,
+// die rechte Seite im Schatten, eckige Augen, das Ärmchen vorgestreckt. Vor ihm liegt der Laptop
+// auf dem Boden; der Deckel klappt um das Scharnier links schräg nach hinten auf. Beim Tippen
+// schnellt das Ärmchen auf und ab.
+const CLAY_SIDE = '#B5583C'
+const LID_GRAY = '#C9C7C0'
+function sideClawdShapes({ isBlink = false, typing = -1 }: Pose): Shape[] {
+  const arm = typing === 0 ? 12.5 : typing === 1 ? 17 : 15
+  const eyes: Shape[] = isBlink
+    ? [[21, 13, 2, 1, INK.ink], [30, 13, 2, 1, INK.ink]]
+    : [[21, 11, 2, 2.5, INK.ink], [30, 11, 2, 2.5, INK.ink]]
+
+  return [
+    [19, 6, 20, 15, INK.clay],
+    [35, 6, 4, 15, CLAY_SIDE],
+    [14, arm, 5, 5, INK.clay],
+    ...eyes,
+    [20, 21, 2, 5, INK.clay],
+    [24, 21, 2, 5, INK.clay],
+    [31, 21, 2, 5, CLAY_SIDE],
+    [36, 21, 2, 5, CLAY_SIDE],
+  ]
+}
+// Das Unterteil liegt flach vor ihm, der Deckel ist eine Linie vom Scharnier aus: zu liegt er auf
+// dem Unterteil, offen steht er 125° gedreht schräg nach links oben.
+const BASE: Shape = [7, 24.8, 10, 1.2, INK.concrete]
+const HINGE = { x: 7.6, y: 24.6, length: 9 }
+export function lidLine(lid: number) {
+  const angle = (125 * lid * Math.PI) / 180
+  const round = (n: number) => Math.round(n * 10) / 10
+
+  return { x1: HINGE.x, y1: HINGE.y, x2: round(HINGE.x + HINGE.length * Math.cos(angle)), y2: round(HINGE.y - HINGE.length * Math.sin(angle)) }
+}
+function sideClawdSvg(pose: Pose): string {
+  const { x1, y1, x2, y2 } = lidLine(pose.lid ?? 1)
+  // Das Display leuchtet auf der Seite, die zu ihm zeigt.
+  const glow = pose.isLit === true ? `<path d="M${(x1 + 0.7).toFixed(1)} ${(y1 - 0.3).toFixed(1)} L${(x2 + 0.7).toFixed(1)} ${(y2 + 0.2).toFixed(1)}" stroke="${SCREEN}" stroke-width="0.6"/>` : ''
+
+  return `<path d="M${x1} ${y1} L${x2} ${y2}" stroke="${LID_GRAY}" stroke-width="1.3" stroke-linecap="square"/>${glow}` + crisp(pxOf([BASE, ...sideClawdShapes(pose)]))
+}
 // Was Clawd unter die Dusche mitbringt: ein Handtuch über der Schulter.
 const TOWEL_SHAPES: Shape[] = [[4, 6, 8, 1.2, TOWEL], [4, 7.2, 2, 7, TOWEL], [4, 11, 2, 0.6, INK.red]]
 const towelPx = crisp(pxOf(TOWEL_SHAPES))
-// Arbeitet Claude, tippt er; im Leerlauf (idle ab 0) ruht er, auch wenn der Hahn tropft.
-const poseOf = (scene: Scene): Pose => {
-  const isWorking = scene.arrival < 0 && scene.water !== null && (scene.idle ?? -1) < 0
+// Arbeitet Claude, tippt er, abwechselnd links und rechts (0 oder 1), sonst -1; im Leerlauf
+// (idle ab 0) ruht er, auch wenn der Hahn tropft. Am Hahn legt er los, sobald der Deckel offen ist.
+export function typingOf(scene: Scene): number {
+  const { arrival } = scene
+  if (arrival >= 0) return scene.role === 'tap' && arrival > LID.open ? arrival % 2 : -1
+  const isWorking = scene.water !== null && (scene.idle ?? -1) < 0
 
-  return { isBlink: !isWorking && isBlinking(scene.idle), typing: isWorking ? scene.tick % 2 : -1, isLit: isWorking }
+  return isWorking ? (scene.keys ?? scene.tick) % 2 : -1
+}
+const poseOf = (scene: Scene): Pose => {
+  const typing = typingOf(scene)
+  const lid = scene.role === 'tap' ? lidOf(scene.arrival) : 1
+
+  return { isBlink: typing < 0 && isBlinking(scene.idle), typing, isLit: typing >= 0, lid }
 }
 
 const splashSvg = (x: number, y: number, colors: SceneColors) =>
@@ -547,22 +628,23 @@ export function sceneSvg(scene: Scene, colors: SceneColors): string {
 
   // Die Anfahrt: Clawd läuft mit dem Laptop von links herein, zur Dusche mit Handtuch.
   let clawd = ''
-  if (arrival >= 0) {
+  const isWalkingIn = isWalking(role, arrival)
+  if (isWalkingIn) {
     const walked = Math.min(1, arrival / ARRIVE.in)
     const step = walked < 1 ? arrival : 0
     const walker = clawdPx({ step }) + (role === 'shower' && walked < 1 ? towelPx : '')
     clawd = `<g transform="translate(${(-32 * (1 - walked)).toFixed(1)} 0)">${walker}</g>`
   } else {
-    clawd = clawdPx(poseOf(scene))
+    clawd = role === 'tap' ? sideClawdSvg(poseOf(scene)) : clawdPx(poseOf(scene))
   }
   const { x, y, width, height } = SCENE_VIEW
   // Was hereinkommt, blendet am linken Rand weich ein, statt dort hart abgeschnitten zu sein; bis
   // x 2, wo Clawds Ärmchen beginnt, damit er angekommen nicht verblasst.
   const fade =
-    arrival >= 0
+    isWalkingIn
       ? `<defs><linearGradient id="burn-rand" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="2" y2="0"><stop offset="0" stop-color="#000"/><stop offset="1" stop-color="#FFF"/></linearGradient><mask id="burn-einfahrt" maskUnits="userSpaceOnUse" x="-60" y="0" width="180" height="40"><rect x="-60" y="0" width="180" height="40" fill="url(#burn-rand)"/></mask></defs>`
       : ''
-  const soft = (inner: string) => (arrival >= 0 && inner !== '' ? `<g mask="url(#burn-einfahrt)">${inner}</g>` : inner)
+  const soft = (inner: string) => (isWalkingIn && inner !== '' ? `<g mask="url(#burn-einfahrt)">${inner}</g>` : inner)
 
   return `<svg xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMin meet" viewBox="${x} ${y} ${width} ${height}">${fade}${back.join('')}${soft(clawd)}${front.join('')}</svg>`
 }
@@ -696,8 +778,11 @@ export function scenePixels(scene: Scene, colors: SceneColors): Pixels {
     if (isTapOpen(arrival)) p.line(50.2, 9.6, 53.4, 6.4, 1.3, INK.red)
     else p.line(50.2, 8.6, 54.4, 8.6, 1.3, INK.red)
     fall(SPOUT.x, SPOUT.y, FLOOR.y)
-    if (!isHere) walkIn(() => p.shapes([...clawdShapes({ step }), ...LAPTOP]))
-    else p.shapes([...clawdShapes(poseOf(scene)), ...laptopOf(poseOf(scene))])
+    // Am Hahn steht er schon da, von der Seite, und klappt den Laptop auf.
+    const pose = poseOf(scene)
+    const lidAt = lidLine(pose.lid ?? 1)
+    p.line(lidAt.x1, lidAt.y1, lidAt.x2, lidAt.y2, 1.3, pose.isLit === true ? SCREEN : LID_GRAY)
+    p.shapes([BASE, ...sideClawdShapes(pose)])
   } else {
     // Rohr, Brausekopf, Duschwanne; der Dampf zieht hinter Clawd, das Gesicht bleibt frei.
     p.rect(36, 3, 1.6, GROUND - 3, INK.concrete, 3)
@@ -734,14 +819,11 @@ export function scenePixels(scene: Scene, colors: SceneColors): Pixels {
 
 export function sceneAlt(scene: Scene): string {
   const { role, water, arrival, level } = scene
+  const isWorking = typingOf(scene) >= 0
   if (arrival >= 0) {
-    const arriving: Record<Role, string> = {
-      tap: 'Clawd walking in with his laptop',
-      shower: 'Clawd walking in with his laptop and a towel',
-    }
-    return arriving[role]
+    if (role === 'shower') return 'Clawd walking in with his laptop and a towel'
+    return isWorking ? 'Clawd typing fast on his laptop' : 'Clawd opening his laptop'
   }
-  const isWorking = (poseOf(scene).typing ?? -1) >= 0
   if (role === 'tap') {
     if (isWorking) return `Clawd typing fast on his laptop while the tap ${scene.strength >= 2 ? 'runs' : 'drips'} onto the floor`
     return water !== null ? 'Clawd at his laptop, the tap drips onto the floor' : 'Clawd at his laptop next to the tap'

@@ -13,7 +13,7 @@ Streamt gerade nichts, läuft eine ruhige Schleife von 15 Sekunden: Clawd blinze
 
 Neben jeder Szene steht, wie viel Wasser verschwendet wurde, für den Zeitraum, den der Tokenzähler gerade zeigt. Gerechnet wird nach Mistrals Ökobilanz (2025) mit 45 ml pro 400 ausgegebenen Tokens; für 24h, 7d und 30d zählt der Mod ab Version 0.14.0 selbst mit, „all time“ kommt aus `/stats`.
 
-Beim Start und nach 30 Minuten Pause kommt Clawd erst an, zu Fuß mit dem Laptop, zur Dusche auch mit Handtuch.
+Beim Start und nach 30 Minuten Pause kommt Clawd erst an. Am Hahn steht er schon da, halb von der Seite wie im Startbild von Claude Code, und klappt den Laptop vor sich auf dem Boden auf, dann haut er in die Tasten und dreht nebenbei den Hahn auf; zur Dusche kommt er zu Fuß mit Laptop und Handtuch.
 
 ## Installieren
 
@@ -60,6 +60,8 @@ Seit 0.23.0 gibt es am Hahn kein Waschbecken mehr: Ein Rohr kommt von oben, das 
 Seit 0.24.0 sieht Clawd in den Apps aus wie im Logo von Claude Code: breiter Körper, hohe schmale Augen, Ärmchen seitlich, vier dünne Beine. Er hält einen Laptop vor sich und tippt, solange Claude arbeitet, mit abwechselnd hochschnellenden Ärmchen und im Tempo der Tokens pro Sekunde; das Display glimmt dabei. Hocker, Liegestuhl, Sonnenschirm, Duschhaube und Singen gibt es nicht mehr: er arbeitet, während das Wasser läuft. Der Strahl am Hahn ist stufenlos so dick wie die Liter pro Sekunde (45 ml je 400 Tokens). Im Terminal bleibt Clawd Text wie bisher, nur ohne Möbel und Haube.
 
 Seit 0.24.1 hängt der Brausekopf ganz oben, ein Stück über Clawds Kopf; dazwischen sieht man den Strahl.
+
+Seit 0.25.0 tippt Clawd in eigenem Takt, so schnell wie die Tokens kommen: je 10 Tokens pro Sekunde ein Anschlag, mindestens 4 und höchstens 20 je Sekunde. Am Hahn steht er in den Apps wie im Startbild von Claude Code: nach links gewandt, die rechte Seite im Schatten, das Ärmchen vorgestreckt; beim Ankommen schwingt der Deckel des Laptops auf dem Boden schräg nach hinten auf, beim Tippen schnellt das Ärmchen auf und ab. Im Terminal schnellen dabei abwechselnd seine Ärmchen hoch, und der Laptop wächst beim Aufklappen von ▁ bis ▮.
 
 `/tokenstats` liest für die Statistik Claude Codes `/stats`-Zwischenspeicher. Den schreibt Claude Code aber nur neu, wenn `/stats` im Terminal läuft; wer in der Desktop-App oder in VS Code arbeitet, sah dort alte Zahlen. Seit 0.19.0 führt Burn deshalb ein eigenes Tagebuch je Unterhaltung und zählt alle Tage nach dem letzten Rechentag des Zwischenspeichers selbst: Tokens je Modell, Messages, Tool-Calls, Sitzungen und Startstunden. Messages zählt Burn wie die Zeilen im Transkript (Prompts, Antwortblöcke, Tool-Ergebnisse); Anhänge und Systemzeilen, die `/stats` mitzählt, sieht der Mod nicht, deshalb liegt der Wert etwas darunter. Tokens, die Burn vor 0.19.0 nur im Stundenbuch gezählt hat, stehen ohne Modell als „Untracked“.
 

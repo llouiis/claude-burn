@@ -2,7 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 import { axisLabel } from '../hooks/chart'
-import { FLOWS, ML_PER_TOKEN, ROLES, jugOf, lidOf, literText, piecesText, sceneAlt, sceneSvg, tapLevel, terminalScene } from '../hooks/clawd'
+import { DESK, FLOWS, ML_PER_TOKEN, ROLES, jugOf, lidOf, literText, piecesText, sceneAlt, sceneSvg, tapLevel, terminalScene } from '../hooks/clawd'
 import type { Scene } from '../hooks/clawd'
 import { addTo, allOutput, costFrom, liveTotals } from '../hooks/ledger'
 import { addToBook, dayNumber, modelName, summarize, withBooks } from '../hooks/stats'
@@ -867,11 +867,11 @@ test('in the light theme the white things get a contour; the dark theme stays as
 
 test('while Claude works Clawd types: the arms take turns and the screen glows', () => {
   const colors = { suggestion: '#B1B9F9', gray: '#B0AEA5' }
-  // Am Hahn von der Seite: das Ärmchen schnellt auf und ab, der Deckel leuchtet zu ihm hin.
-  const side = (tick: number) => sceneSvg({ role: 'tap', water: FLOWS[2]?.[tick] ?? null, strength: 2, tick, level: 1, arrival: -1 }, colors)
-  expect(side(0)).toContain('<rect x="14" y="12.5" width="5" height="5"')
-  expect(side(1)).toContain('<rect x="14" y="17" width="5" height="5"')
-  expect(side(0)).toContain('stroke="#9FD8FF"')
+  // Am Wasserspender von der Seite: vorderes und hinteres Ärmchen wechseln sich in drei Bildern ab.
+  const side = (tick: number) => sceneSvg({ role: 'tap', water: FLOWS[2]?.[0] ?? null, strength: 2, tick, level: 1, arrival: -1 }, colors)
+  expect(side(0)).toContain('<rect x="10" y="18" width="4" height="4" fill="#D97757"')
+  expect(side(1)).toContain('<rect x="10" y="22" width="4" height="3" fill="#B5583C"')
+  expect(side(2)).toContain('<rect x="10" y="17" width="4" height="2.5" fill="#B5583C"')
   for (const role of ROLES) {
     const working = (tick: number) => sceneSvg({ role, water: FLOWS[2]?.[tick] ?? null, strength: 2, tick, level: 1, arrival: -1 }, colors)
     if (role === 'shower') {
@@ -922,7 +922,7 @@ test('the steam leaves Clawds face free, arrivals fade in at the edge', () => {
   // Er macht es sich nicht mehr bequem: auch bei vielen Litern steht er am Laptop.
   const busy = sceneSvg({ role: 'tap', water: null, strength: 0, tick: 0, level: 4, arrival: -1 }, colors)
   expect(busy).not.toContain('rotate(')
-  expect(busy).toContain('stroke="#C9C7C0"')
+  expect(busy).toContain('<rect x="16" y="10" width="16" height="12" fill="#D97757"')
   // Wer hereinkommt, blendet am linken Rand ein; angekommen gibt es keine Maske mehr. Am Hahn
   // läuft Clawd nicht, er klappt nur den Laptop auf.
   expect(sceneSvg({ role: 'shower', water: null, strength: 0, tick: 0, level: 0, arrival: 3 }, colors)).toContain('mask="url(#burn-einfahrt)"')
@@ -930,30 +930,66 @@ test('the steam leaves Clawds face free, arrivals fade in at the edge', () => {
   expect(sceneSvg({ role: 'shower', water: null, strength: 0, tick: 0, level: 0, arrival: -1 }, colors)).not.toContain('mask=')
 })
 
-test('at the tap Clawd opens his laptop first: the lid swings up and back, then he types and the screen glows', () => {
+test('at the water cooler Clawd plays the sequence: fade in, wink, get the laptop out, type, put it away', () => {
   const colors = { suggestion: '#B1B9F9', gray: '#B0AEA5' }
-  // Die Spitze des Deckels: zu liegt sie rechts auf dem Unterteil, dann schwingt sie nach links oben.
-  const tip = (arrival: number) => {
-    const svg = sceneSvg({ role: 'tap', water: null, strength: 0, tick: 0, level: 0, arrival }, colors)
-    const m = /<path d="M7.6 24.6 L([\d.]+) ([\d.]+)" stroke="#C9C7C0"/.exec(svg)
-    return { x: Number(m?.[1]), y: Number(m?.[2]) }
-  }
-  const tips = [0, 2, 3, 4, 5, 6, 7].map(tip)
-  expect(tips[0]).toEqual({ x: 16.6, y: 24.6 })
-  expect(tips.map(t => t.x)).toEqual([...tips.map(t => t.x)].sort((a, b) => b - a))
-  expect(tips[6]?.y).toBeLessThan(18)
+  const at = (desk: number, more: Partial<Scene> = {}) => sceneSvg({ role: 'tap', water: null, strength: 0, tick: 0, level: 0, arrival: -1, desk, ...more }, colors)
+  const LAPTOP = '<rect x="7" y="25" width="6" height="1" fill="#A9A7A0"'
+  // Er blendet von vorn ein, ohne Laptop.
+  expect(at(0)).toContain('<g opacity="0.25">')
+  expect(at(2)).toContain('<g opacity="0.85">')
+  expect(at(DESK.wink)).not.toContain('<g opacity')
+  // Zwinkern: das rechte Auge ist ein Strich, das linke offen.
+  expect(at(DESK.wink)).toContain('<rect x="27" y="14.5" width="3" height="1" fill="#1F1E1D"')
+  expect(at(DESK.wink)).toContain('<rect x="18" y="13.5" width="2" height="2.5" fill="#1F1E1D"')
+  // Der Laptop ist erst beim Abstellen unten und bleibt es beim Tippen.
+  for (const desk of [0, DESK.wink, 8, 9, 10, DESK.tuck, DESK.rest]) expect({ desk, down: at(desk).includes(LAPTOP) }).toEqual({ desk, down: false })
+  for (const desk of [12, 14, 15, DESK.typing]) expect({ desk, down: at(desk, { keys: 1 }).includes(LAPTOP) }).toEqual({ desk, down: true })
+  // Jedes Bild zeichnet etwas anderes als das davor, außer wo die Vorlage kurz steht.
+  const shown = Array.from({ length: DESK.rest + 1 }, (_, desk) => at(desk))
+  expect(new Set(shown).size).toBeGreaterThan(12)
+  expect(shown[DESK.rest]).toContain('<rect x="12" y="14" width="4" height="4"')
+  // Geruht wird von vorn; beim Blinzeln sind die Augen ein Strich.
+  expect(at(DESK.rest, { idle: 6 })).toContain('<rect x="18" y="13" width="2" height="1" fill="#1F1E1D"')
   expect(lidOf(-1)).toBe(1)
-  // Beim Aufklappen ruht das Ärmchen und das Display ist dunkel, danach tippt er in schnellem Wechsel.
-  const lifting = sceneSvg({ role: 'tap', water: null, strength: 0, tick: 0, level: 0, arrival: 4 }, colors)
-  expect(lifting).toContain('<rect x="14" y="15" width="5" height="5"')
-  expect(lifting).not.toContain('#9FD8FF')
-  const typed = [8, 9].map(arrival => sceneSvg({ role: 'tap', water: null, strength: 0, tick: 0, level: 0, arrival }, colors))
-  expect(typed[0]).toContain('#9FD8FF')
-  expect(typed[0]).not.toBe(typed[1])
-  // Angekommen tippt er im Takt der Anschläge, nicht des Wassers.
-  const keyed = (keys: number) => sceneSvg({ role: 'tap', water: FLOWS[2]?.[0] ?? null, strength: 2, tick: 0, level: 1, arrival: -1, keys }, colors)
-  expect(keyed(0)).toContain('<rect x="14" y="12.5" width="5" height="5"')
-  expect(keyed(1)).toContain('<rect x="14" y="17" width="5" height="5"')
+  // Durch den Schlauch fließt es nur beim Tippen, nicht beim Auspacken.
+  const flowing = (desk: number) => /stroke-dasharray/.test(at(desk, { water: FLOWS[2]?.[0] ?? null, strength: 2 }))
+  expect(flowing(DESK.typing)).toBe(true)
+  expect(flowing(10)).toBe(false)
+  // Beim Tippen zählen die Anschläge, nicht der Takt des Wassers.
+  const keyed = (keys: number) => at(DESK.typing, { water: FLOWS[2]?.[0] ?? null, strength: 2, keys })
+  expect(keyed(0)).not.toBe(keyed(1))
+  expect(keyed(0)).toBe(keyed(3))
+})
+
+test('the sequence runs by itself: it shows off on arrival, comes back with work and packs up after it', async ($, on) => {
+  engine(on)
+  const clock = mock.clock(on, { now: NOW })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.session.measure(measure)
+  await $.command.run({ command: 'clawd', args: 'spender' })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const svg = async () => String((await svgOf(ui))?.props.source)
+  const LAPTOP = /x="7" y="2[45]" width="6"/
+
+  await clock.advance(90)
+  expect(await svg()).toContain('opacity')
+  // Mitten im Tippen steht der Laptop ...
+  await clock.advance(20 * 90)
+  expect(await svg()).toMatch(LAPTOP)
+  // ... danach packt er ein und ruht.
+  await clock.advance(20 * 90)
+  expect(await svg()).not.toMatch(LAPTOP)
+
+  usages.push({ model: 'claude-opus-5-5', input_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1_000 })
+  const close = await openStream($)
+  await clock.advance(16 * 90)
+  expect(await svg()).toMatch(LAPTOP)
+  // Solange der Strom läuft, bleibt er dabei; danach noch ein paar Sekunden, dann packt er ein.
+  await close()
+  await clock.advance(2_000)
+  expect(await svg()).toMatch(LAPTOP)
+  await clock.advance(5_000)
+  expect(await svg()).not.toMatch(LAPTOP)
 })
 
 test('Clawd arrives at the start and again after half an hour without replies; the water waits', async ($, on) => {
@@ -1008,7 +1044,7 @@ test('at the tap Clawd opens his laptop like at the start of Claude Code, to the
   expect(await tapText(ui)).toBe('       ━┓')
   expect(await rowText(ui, 'clawd')).toMatch(/^▐▛███▜▌▄/)
   const opening = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  expect((await svgOf(opening))?.props.alt).toBe('Clawd opening his laptop')
+  expect((await svgOf(opening))?.props.alt).toBe('Clawd getting out his laptop')
   await opening.unmount()
   await clock.advance(4 * 120)
   expect(await rowText(ui, 'clawd')).toMatch(/^[▐▗]▛███▜[▌▖]▮/)
@@ -1179,9 +1215,9 @@ test('at the tap Clawd works while the water runs onto the floor, and the puddle
 
   const app = await $.ui.mount({ ...BAND, surface: 'desktop' })
   const svg = await svgOf(app)
-  expect(svg?.props.alt).toBe('Clawd at his laptop next to the water cooler')
+  expect(svg?.props.alt).toBe('Clawd standing next to the water cooler')
   // Der Laptop steht vor ihm, am Spender sind die Hähne rot und blau; ab 3 L liegen drei leere Ballons daneben.
-  expect(String(svg?.props.source)).toContain('stroke="#C9C7C0"')
+  expect(String(svg?.props.source)).toContain('<rect x="16" y="10" width="16" height="12" fill="#D97757"')
   expect(String(svg?.props.source)).toContain('#C8372D')
   expect(String(svg?.props.source).match(/width="3.4" height="2" fill="#7C9AB5"/g)?.length).toBe(3)
   expect(plain((await (app as unknown as Drawing).find({ type: 'Text', text: /≈/ }))?.text)).toMatch(/^ ≈ 2\d,\d L$/)
@@ -1281,7 +1317,7 @@ test('idle, Clawd blinks; the water cooler gulps once per loop, in the shower so
     await clock.advance(500)
     const source = String((await svgOf(app))?.props.source)
     sources.add(source)
-    if (source.includes('y="12" width="2" height="2" fill="#1F1E1D"') || source.includes('y="13" width="2" height="1" fill="#1F1E1D"')) blinks += 1
+    if (source.includes('y="13" width="2" height="1" fill="#1F1E1D"')) blinks += 1
     if (source.includes('r="0.55" fill="none" stroke="#FFFFFF"')) drops += 1
   }
   expect(sources.size).toBeGreaterThanOrEqual(5)

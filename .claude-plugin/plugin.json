@@ -1,6 +1,6 @@
 {
   "name": "burn",
-  "version": "0.26.0",
+  "version": "0.27.0",
   "description": "Dezente Leiste über dem Eingabefeld mit den Nutzungslimits wie /usage, per Klick durchschaltbar; daneben tippt Clawd am Laptop und verschwendet dabei in einer ausgelosten Rolle Wasser, mit Literanzeige (Wasserspender, Dusche)",
   "types": "./types/index.d.ts",
   "author": {

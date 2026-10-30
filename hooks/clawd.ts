@@ -7,8 +7,9 @@
 //            Terminal noch der Hahn, das Wasser läuft auf den Boden in eine Pfütze.
 //   Dusche:  Clawd tippt unter der Dauerdusche, der Dampf wird mit der Sitzung dichter.
 // Clawd sieht aus wie im Logo von Claude Code und tippt, solange Claude arbeitet.
-// Am Hahn kommt er nicht gelaufen: wie beim Start von Claude Code steht er da, klappt den
-// Laptop auf und haut sofort in die Tasten, so schnell wie die Tokens pro Sekunde kommen.
+// Am Wasserspender blendet er von vorn ein, zwinkert, holt den Laptop hinter dem Rücken hervor,
+// stellt ihn links ab und tippt von der Seite, so schnell wie die Tokens pro Sekunde kommen;
+// danach packt er ihn wieder weg und ruht von vorn (siehe DESK).
 // Pool, Wanne und See gab es bis 0.18.0.
 
 export type Color = 'claude' | 'error' | 'warning' | 'suggestion' | 'inactive' | 'success'
@@ -85,6 +86,8 @@ export type Scene = {
   keys?: number
   // Am Wasserspender die Milliliter der Sitzung: so weit ist der Ballon leer, so viele liegen daneben
   ml?: number
+  // Am Wasserspender in den Apps: das Bild aus dem Ablauf DESK; fehlt es, folgt es der Arbeit
+  desk?: number
 }
 // Der Strahl am Hahn wächst stufenlos mit den Litern pro Sekunde: 4,5 ml/s (40 Tokens/s) sind
 // knapp 1 Einheit, 22,5 ml/s (200) rund 2, ab gut 40 ml/s 3,5. Ohne Messung wie die Stärke.
@@ -392,11 +395,9 @@ const TOWEL = '#F4F1EA'
 type Shape = [number, number, number, number, string]
 const pxOf = (shapes: Shape[]) => shapes.map(([x, y, w, h, c]) => px(x, y, w, h, c)).join('')
 // `step` hebt beim Gehen jedes zweite Bein; `typing` 0 oder 1 hebt beim Tippen abwechselnd ein
-// Ärmchen (-1 ruht); `isLit`: das Display leuchtet, die Oberkante des Deckels glimmt; `lid`:
-// wie weit der Deckel offen ist (0 bis 1), dabei hebt er ihn mit beiden Ärmchen an.
-type Pose = { step?: number; isBlink?: boolean; typing?: number; isLit?: boolean; lid?: number }
-function clawdShapes({ step = 0, isBlink = false, typing = -1, lid = 1 }: Pose): Shape[] {
-  const isLifting = lid > 0 && lid < 1
+// Ärmchen (-1 ruht); `isLit`: das Display leuchtet, die Oberkante des Deckels glimmt.
+type Pose = { step?: number; isBlink?: boolean; typing?: number; isLit?: boolean }
+function clawdShapes({ step = 0, isBlink = false, typing = -1 }: Pose): Shape[] {
   const lift = (i: number) => (step % 2 === 1 && i % 2 === 1 ? 2 : 0)
   const eyes: Shape[] = isBlink
     ? [[10, 12, 2, 2, INK.ink], [24, 12, 2, 2, INK.ink]]
@@ -404,70 +405,131 @@ function clawdShapes({ step = 0, isBlink = false, typing = -1, lid = 1 }: Pose):
 
   return [
     [6, 6, 24, 16, INK.clay],
-    [2, typing === 0 ? 11 : isLifting ? 12.5 : 14, 4, 4, INK.clay],
-    [30, typing === 1 ? 11 : isLifting ? 12.5 : 14, 4, 4, INK.clay],
+    [2, typing === 0 ? 11 : 14, 4, 4, INK.clay],
+    [30, typing === 1 ? 11 : 14, 4, 4, INK.clay],
     ...eyes,
     ...[8, 12, 22, 26].map((x, i): Shape => [x, 22, 2, 4 - lift(i), INK.clay]),
   ]
 }
 // Der Laptop, aufgeklappt vor ihm: von vorn sieht man den Deckel, darunter die Tastatur.
 const SCREEN = '#9FD8FF'
-// Beim Aufklappen wächst der Deckel von flach bis 4,4 hoch.
-function laptopOf({ lid = 1, isLit = false }: Pose): Shape[] {
-  const height = Math.round(Math.max(0.8, 4.4 * lid) * 10) / 10
-  const top = Math.round((20 - height) * 10) / 10
-  const shapes: Shape[] = [[10, top, 16, height, '#C9C7C0'], [8, 20, 20, 1.4, '#8D8B85']]
+function laptopOf({ isLit = false }: Pose): Shape[] {
+  const shapes: Shape[] = [[10, 15.6, 16, 4.4, '#C9C7C0'], [8, 20, 20, 1.4, '#8D8B85']]
 
-  return isLit ? [...shapes, [10, top, 16, 0.8, SCREEN]] : shapes
+  return isLit ? [...shapes, [10, 15.6, 16, 0.8, SCREEN]] : shapes
 }
 const LAPTOP = laptopOf({})
 const clawdPx = (pose: Pose) => crisp(pxOf([...clawdShapes(pose), ...laptopOf(pose)]))
 
-// Am Hahn steht Clawd wie im Startbild von Claude Code: halb von der Seite, nach links gewandt,
-// die rechte Seite im Schatten, eckige Augen, das Ärmchen vorgestreckt. Vor ihm liegt der Laptop
-// auf dem Boden; der Deckel klappt um das Scharnier links schräg nach hinten auf. Beim Tippen
-// schnellt das Ärmchen auf und ab.
+// Am Wasserspender spielt Clawd einen festen Ablauf, Bild für Bild aus der Vorlage abgetastet:
+// je 2 Einheiten ein Pixel, 16 breit und 16 hoch, x 0 ist seine linke Körperkante, y 0 sein Kopf.
+// Grau ist der Laptop, links neben ihm am Boden; die Bilder stehen im Takt von 90 ms.
 const CLAY_SIDE = '#B5583C'
-const LID_GRAY = '#C9C7C0'
-function sideClawdShapes({ isBlink = false, typing = -1 }: Pose): Shape[] {
-  const arm = typing === 0 ? 12.5 : typing === 1 ? 17 : 15
-  const eyes: Shape[] = isBlink
-    ? [[21, 13, 2, 1, INK.ink], [30, 13, 2, 1, INK.ink]]
-    : [[21, 11, 2, 2.5, INK.ink], [30, 11, 2, 2.5, INK.ink]]
+const shapeIn = (color: string) => (x: number, y: number, w: number, h: number): Shape => [x, y, w, h, color]
+const clay = shapeIn(INK.clay)
+const shade = shapeIn(CLAY_SIDE)
+const dark = shapeIn(INK.ink)
+const metal = shapeIn(INK.concreteTop)
+const frontLegs = [0, 4, 10, 14].map(x => clay(x, 12, 2, 4))
+const frontBody = [clay(0, 0, 16, 12), ...frontLegs]
+const frontEyes = (y: number) => [dark(2, y, 2, 2), dark(12, y, 2, 2)]
+// Von vorn: die Ärmchen seitlich, beim Blinzeln nur noch ein Strich.
+const frontOf = (isBlink: boolean) => [...frontBody, clay(-4, 4, 4, 4), clay(16, 4, 4, 4), ...(isBlink ? [dark(2, 3, 2, 1), dark(12, 3, 2, 1)] : frontEyes(2))]
+// Halb gedreht: das rechte Ärmchen oben, das linke unten; beim Zwinkern das rechte Auge ein Strich.
+const turnedOf = (isWink: boolean, armAt = -3) => [
+  ...frontBody,
+  clay(16, 2, 4, 4),
+  clay(armAt, 7, -armAt, 4),
+  dark(2, 3.5, 2, 2.5),
+  isWink ? dark(11, 4.5, 3, 1) : dark(12, 3.5, 2, 2.5),
+]
+// Der abgestellte Laptop: Deckel schräg nach links oben, Unterteil am Boden.
+const laptopAt = (dy = 0) => [
+  metal(-13, 10 + dy, 1, 1),
+  metal(-13, 11 + dy, 2, 1),
+  metal(-12, 12 + dy, 2, 1),
+  metal(-11, 13 + dy, 2, 1),
+  metal(-10, 14 + dy, 2, 1),
+  metal(-9, 15 + dy, 6, 1),
+]
+// Von der Seite: die rechte Seite im Schatten, die Beine im Schritt versetzt.
+const sideLegs = [-2, 2, 8, 12].flatMap((x, i) => {
+  const leg = i === 3 ? shade : clay
 
-  return [
-    [19, 6, 20, 15, INK.clay],
-    [35, 6, 4, 15, CLAY_SIDE],
-    [14, arm, 5, 5, INK.clay],
-    ...eyes,
-    [20, 21, 2, 5, INK.clay],
-    [24, 21, 2, 5, INK.clay],
-    [31, 21, 2, 5, CLAY_SIDE],
-    [36, 21, 2, 5, CLAY_SIDE],
-  ]
-}
-// Das Unterteil liegt flach vor ihm, der Deckel ist eine Linie vom Scharnier aus: zu liegt er auf
-// dem Unterteil, offen steht er 125° gedreht schräg nach links oben.
-const BASE: Shape = [7, 24.8, 10, 1.2, INK.concrete]
-const HINGE = { x: 7.6, y: 24.6, length: 9 }
-export function lidLine(lid: number) {
-  const angle = (125 * lid * Math.PI) / 180
-  const round = (n: number) => Math.round(n * 10) / 10
+  return [leg(x, 13, 2, 1), leg(x, 14, 3, 1), leg(x + 1, 15, 2, 1)]
+})
+const sideBody = [clay(-2, 2, 12, 11), shade(10, 2, 4, 11), dark(-2, 4.5, 2, 2.5), dark(5, 4.5, 2, 2.5), ...sideLegs]
+// Beim Tippen drei Bilder: das vordere Ärmchen und das hintere (im Schatten) wechseln sich ab,
+// beim ersten wippt der Laptop ein Stück hoch.
+const TYPING: Shape[][] = [
+  [...laptopAt(-1), ...sideBody, clay(-5, 7, 3, 1), clay(-6, 8, 4, 4)],
+  [...laptopAt(), ...sideBody, clay(-5, 7, 3, 4), shade(-6, 12, 4, 3)],
+  [...laptopAt(), ...sideBody, shade(-6, 7, 4, 2.5), clay(-6, 9.5, 4, 3.5)],
+]
+const FRONT = frontOf(false)
+const WINK = turnedOf(true)
+const SWING = [
+  metal(-12, 3, 2, 1),
+  metal(-13, 4, 4, 1),
+  metal(-13, 5, 5, 1),
+  metal(-12, 6, 4, 1),
+  metal(-11, 7, 9, 1),
+  metal(-9, 8, 5, 1),
+  ...frontBody,
+  clay(16, 4, 4, 4),
+  clay(-3, 5, 3, 3),
+  clay(-4, 8, 4, 4),
+  ...frontEyes(3),
+]
+// Der ganze Ablauf: einblenden, zwinkern, Laptop hervorholen, abstellen, drehen, tippen (dort
+// hält er), wegpacken, von vorn ruhen. Beim Tippen zeigt TYPING das Bild.
+const DESK_FRAMES: Shape[][] = [
+  FRONT,
+  FRONT,
+  FRONT,
+  WINK,
+  WINK,
+  WINK,
+  WINK,
+  WINK,
+  // Der Laptop kommt hinter dem Rücken hervor, über die Schulter und im Bogen nach unten.
+  [metal(-3, -3, 2, 1), metal(-5, -2, 4, 1), metal(-8, -1, 5, 1), metal(-8, 0, 3, 1), metal(-8, 1, 7, 1), ...frontBody, clay(16, 5, 4, 4), clay(-4, 2, 4, 3), clay(-3, 5, 3, 1), clay(-2, 6, 2, 1), ...frontEyes(2)],
+  [metal(-7, -7, 1, 6), metal(-7, -2, 6, 1), ...frontBody, clay(16, 5, 4, 4), clay(-4, -1, 2.5, 3), clay(-4, 0, 4, 2), ...frontEyes(2)],
+  SWING,
+  SWING,
+  [...laptopAt(), ...frontBody, clay(16, 5, 4, 4), clay(-4, 9, 4, 4), ...frontEyes(3)],
+  // Er rutscht flach auf, dann reißt Clawd die Ärmchen hoch und dreht sich zur Seite.
+  [metal(-14, 12, 2, 1), metal(-12, 13, 2, 1), metal(-10, 14, 2, 1), metal(-9, 15, 6, 1), ...frontBody, clay(16, 3, 4, 4), clay(-4, 4, 4, 4), ...frontEyes(3)],
+  [...laptopAt(), clay(-2, -4, 4, 4), clay(8, -4, 4, 4), clay(-3, -1, 16, 3), shade(13, -1, 2, 3), clay(-1, 2, 14, 10), shade(13, 2, 2, 10), dark(-1, 3, 2, 2), dark(9, 3, 2, 2), ...[-1, 3, 9, 13].map(x => clay(x, 12, 2, 4))],
+  [...laptopAt(), clay(-2, 1, 12, 12), shade(10, 1, 4, 12), clay(-6, 3, 4, 4), dark(-3, 4, 2, 2), dark(5, 4, 2, 2), clay(-6, 10, 4, 4), ...sideLegs],
+  TYPING[0] ?? [],
+  // Wegpacken: der Deckel klappt zu, der Laptop verschwindet unter dem Ärmchen.
+  [metal(-12, 6, 1, 1), metal(-12, 7, 2, 1), metal(-11, 8, 2, 1), metal(-10, 9, 2, 1), metal(-9, 10, 2, 1), metal(-8, 11, 2, 1), clay(-1, 1, 12, 12), shade(11, 1, 4, 12), clay(-5, 3, 4, 4), dark(-1, 4, 2, 2), dark(6, 4, 2, 2), clay(-6, 10, 6, 4), ...sideLegs],
+  [metal(-4, 5, 1, 1), metal(-5, 6, 1, 1), metal(-7, 7, 2, 1), metal(-8, 8, 2, 2), metal(-8, 10, 6, 1), clay(0, 0, 14, 12), shade(14, 0, 2, 12), clay(16, 5, 3, 4), clay(-4, 8, 4, 3), dark(0, 3, 2, 2), dark(9, 3, 2, 2), ...frontLegs.slice(0, 3), shade(14, 12, 2, 4)],
+  turnedOf(false),
+  turnedOf(false),
+  turnedOf(false, -2),
+  FRONT,
+]
+// Die Marken im Ablauf: `wink` ist der Einstieg, wenn er schon dasteht; beim Tippen hält der Takt.
+export const DESK = { wink: 3, typing: 16, tuck: 17, rest: DESK_FRAMES.length - 1 }
+const DESK_FADE = [0.25, 0.55, 0.85]
+export const deskOf = (scene: Scene) => scene.desk ?? (typingOf(scene) >= 0 ? DESK.typing : DESK.rest)
+// Clawds Formen in der Szene: die Füße auf y 26, der Laptop reicht bis x 3.
+function deskShapes(scene: Scene): Shape[] {
+  const desk = deskOf(scene)
+  const isBlink = desk === DESK.rest && isBlinking(scene.idle)
+  const shapes = desk === DESK.typing ? TYPING[(scene.keys ?? scene.tick) % TYPING.length] : isBlink ? frontOf(true) : DESK_FRAMES[desk]
 
-  return { x1: HINGE.x, y1: HINGE.y, x2: round(HINGE.x + HINGE.length * Math.cos(angle)), y2: round(HINGE.y - HINGE.length * Math.sin(angle)) }
+  return (shapes ?? FRONT).map(([x, y, w, h, c]): Shape => [x + 16, y + 10, w, h, c])
 }
-function sideClawdSvg(pose: Pose): string {
-  const { x1, y1, x2, y2 } = lidLine(pose.lid ?? 1)
-  // Das Display leuchtet auf der Seite, die zu ihm zeigt.
-  const glow = pose.isLit === true ? `<path d="M${(x1 + 0.7).toFixed(1)} ${(y1 - 0.3).toFixed(1)} L${(x2 + 0.7).toFixed(1)} ${(y2 + 0.2).toFixed(1)}" stroke="${SCREEN}" stroke-width="0.6"/>` : ''
-
-  return `<path d="M${x1} ${y1} L${x2} ${y2}" stroke="${LID_GRAY}" stroke-width="1.3" stroke-linecap="square"/>${glow}` + crisp(pxOf([BASE, ...sideClawdShapes(pose)]))
-}
+const deskOpacity = (scene: Scene) => DESK_FADE[deskOf(scene)] ?? 1
 // Was Clawd unter die Dusche mitbringt: ein Handtuch über der Schulter.
 const TOWEL_SHAPES: Shape[] = [[4, 6, 8, 1.2, TOWEL], [4, 7.2, 2, 7, TOWEL], [4, 11, 2, 0.6, INK.red]]
 const towelPx = crisp(pxOf(TOWEL_SHAPES))
 // Arbeitet Claude, tippt er, abwechselnd links und rechts (0 oder 1), sonst -1; im Leerlauf
-// (idle ab 0) ruht er, auch wenn der Hahn tropft. Am Hahn legt er los, sobald der Deckel offen ist.
+// (idle ab 0) ruht er, auch wenn der Hahn tropft. Im Terminal legt er am Hahn los, sobald der
+// Deckel offen ist.
 export function typingOf(scene: Scene): number {
   const { arrival } = scene
   if (arrival >= 0) return scene.role === 'tap' && arrival > LID.open ? arrival % 2 : -1
@@ -477,9 +539,8 @@ export function typingOf(scene: Scene): number {
 }
 const poseOf = (scene: Scene): Pose => {
   const typing = typingOf(scene)
-  const lid = scene.role === 'tap' ? lidOf(scene.arrival) : 1
 
-  return { isBlink: typing < 0 && isBlinking(scene.idle), typing, isLit: typing >= 0, lid }
+  return { isBlink: typing < 0 && isBlinking(scene.idle), typing, isLit: typing >= 0 }
 }
 
 const splashSvg = (x: number, y: number, colors: SceneColors) =>
@@ -506,7 +567,7 @@ const emptiesOf = (n: number): Shape[] =>
   Array.from({ length: n }, (_, i): Shape[] => [[55.6, 23.6 - i * 2.2, 3.4, 2, INK.glassEdge], [59, 24.1 - i * 2.2, 0.8, 1, INK.glassEdge]]).flat()
 // Der Schlauch: vom Spender schräg hinab, vor Clawds Füßen am Boden entlang und von hinten in
 // den Laptop. Durchsichtig bläulich, damit er sich vom grauen Unterteil abhebt.
-const HOSE: [number, number][] = [[45, 22.5], [42, 26.6], [18.5, 26.6], [17, 25.4]]
+const HOSE: [number, number][] = [[45, 22.5], [42, 26.6], [14, 26.6], [13, 25.6]]
 const HOSE_COLOR = INK.glassEdge
 const hosePath = HOSE.map(([x, y], i) => `${i === 0 ? 'M' : 'L'}${x} ${y}`).join(' ')
 // So dick fließt es im Schlauch, mit den Litern pro Sekunde.
@@ -524,10 +585,11 @@ function jugBubbles(scene: Scene, top: number): { x: number; y: number }[] {
   return list.filter(b => b.y > top + 0.6)
 }
 // Der Dampf über dem Laptop: je Stärke eine Schwade mehr, sie steigen auf.
-const VAPOR: [number, number, number][] = [[4, 15, 1.4], [2.5, 11.5, 2], [5, 8, 2.4], [2.4, 5.4, 2.6]]
+// Durch den Schlauch fließt es nur, wenn der Laptop steht und Clawd tippt.
+const isFlowingIn = (scene: Scene) => scene.water !== null && (scene.idle ?? -1) < 0 && deskOf(scene) === DESK.typing
+const VAPOR: [number, number, number][] = [[6, 17, 1.4], [4.5, 13.5, 2], [7, 10, 2.4], [4.4, 7.4, 2.6]]
 const vaporOf = (scene: Scene) =>
-  scene.water !== null && (scene.idle ?? -1) < 0 ? VAPOR.slice(0, scene.strength + 1).map(([x, y, r]): [number, number, number] => [x, y - (scene.tick % 3) * 0.7, r]) : []
-const isFlowingIn = (scene: Scene) => scene.water !== null && (scene.idle ?? -1) < 0
+  isFlowingIn(scene) ? VAPOR.slice(0, scene.strength + 1).map(([x, y, r]): [number, number, number] => [x, y - (scene.tick % 3) * 0.7, r]) : []
 
 function coolerSvg(scene: Scene, colors: SceneColors): { back: string; front: string } {
   const isLight = colors.isLight === true
@@ -646,7 +708,9 @@ export function sceneSvg(scene: Scene, colors: SceneColors): string {
     const walker = clawdPx({ step }) + (role === 'shower' && walked < 1 ? towelPx : '')
     clawd = `<g transform="translate(${(-32 * (1 - walked)).toFixed(1)} 0)">${walker}</g>`
   } else {
-    clawd = role === 'tap' ? sideClawdSvg(poseOf(scene)) : clawdPx(poseOf(scene))
+    const opacity = role === 'tap' ? deskOpacity(scene) : 1
+    const drawn = role === 'tap' ? crisp(pxOf(deskShapes(scene))) : clawdPx(poseOf(scene))
+    clawd = opacity < 1 ? `<g opacity="${opacity}">${drawn}</g>` : drawn
   }
   const { x, y, width, height } = SCENE_VIEW
   // Was hereinkommt, blendet am linken Rand weich ein, statt dort hart abgeschnitten zu sein; bis
@@ -778,11 +842,9 @@ export function scenePixels(scene: Scene, colors: SceneColors): Pixels {
     p.rect(JUG.x, JUG.y, JUG.width, JUG.height, withAlpha(INK.glass, 0.35), 3)
     if (fill > 0) p.rect(JUG.x, top, JUG.width, JUG.y + JUG.height - top, wet, 3)
     for (const { x, y } of jugBubbles(seen, top)) p.rect(x - 0.8, y - 0.8, 1.6, 1.6, withAlpha('#FFFFFF', 0.8), 3)
-    // Am Hahn steht er schon da, von der Seite, und klappt den Laptop auf.
-    const pose = poseOf(scene)
-    const lidAt = lidLine(pose.lid ?? 1)
-    p.line(lidAt.x1, lidAt.y1, lidAt.x2, lidAt.y2, 1.3, pose.isLit === true ? SCREEN : LID_GRAY)
-    p.shapes([BASE, ...sideClawdShapes(pose)])
+    // Clawd im selben Ablauf wie im Svg; beim Einblenden mit Deckkraft.
+    const opacity = deskOpacity(scene)
+    p.shapes(deskShapes(scene).map(([x, y, w, h, c]): Shape => [x, y, w, h, opacity < 1 ? withAlpha(c, opacity) : c]), 3)
     for (const [x, y, r] of vaporOf(seen)) p.oval(x, y, r, r, withAlpha(isLight ? INK.concrete : '#FFFFFF', 0.3))
   } else {
     // Rohr, Brausekopf, Duschwanne; der Dampf zieht hinter Clawd, das Gesicht bleibt frei.
@@ -821,14 +883,13 @@ export function scenePixels(scene: Scene, colors: SceneColors): Pixels {
 export function sceneAlt(scene: Scene): string {
   const { role, arrival, level } = scene
   const isWorking = typingOf(scene) >= 0
-  if (arrival >= 0) {
-    if (role === 'shower') return 'Clawd walking in with his laptop and a towel'
-    return isWorking ? 'Clawd typing fast on his laptop' : 'Clawd opening his laptop'
-  }
   if (role === 'tap') {
-    if (isWorking) return 'Clawd typing fast on his laptop, which drinks from the water cooler and steams'
-    return 'Clawd at his laptop next to the water cooler'
+    const desk = deskOf(scene)
+    if (desk === DESK.typing) return isWorking ? 'Clawd typing fast on his laptop, which drinks from the water cooler and steams' : 'Clawd typing on his laptop next to the water cooler'
+    if (desk === DESK.rest) return 'Clawd standing next to the water cooler'
+    return desk < DESK.typing ? 'Clawd getting out his laptop' : 'Clawd putting his laptop away'
   }
+  if (arrival >= 0) return 'Clawd walking in with his laptop and a towel'
   const steam = level >= 6 ? ' in thick steam' : ''
 
   return isWorking ? `Clawd typing fast on his laptop under the running shower${steam}` : `Clawd with his laptop under the shower${steam}`

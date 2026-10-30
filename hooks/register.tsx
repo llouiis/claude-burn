@@ -15,6 +15,7 @@ import type { Ledger } from './ledger'
 import type { Series } from './chart'
 import {
   appScene,
+  DESK,
   APP_LARGE,
   APP_SMALL,
   APP_TINY,
@@ -172,6 +173,16 @@ const ARRIVE_TICK = 120
 const PAUSE = 30 * 60_000
 let arrivalNow = -1
 let arriver: { cancel: () => void } | undefined
+// Clawd am Wasserspender in den Apps: das Bild im Ablauf DESK (siehe clawd.ts). Beim Tippen hält
+// der Takt bis `deskUntil`: nach dem letzten Strom noch DESK_GRACE, damit er zwischen zwei
+// Modellaufrufen nicht jedes Mal einpackt. Beim Ankommen tippt er DESK_SHOW lang, auch ohne Arbeit.
+const desk = atom({ plugin: 'burn', key: 'desk' } as const, DESK.rest)
+const DESK_TICK = 90
+const DESK_GRACE = 4_000
+const DESK_SHOW = 32 * DESK_TICK
+let deskNow = DESK.rest
+let deskUntil = 0
+let desker: { cancel: () => void } | undefined
 // Der Leerlauf (siehe clawd.ts): Bild 0 bis IDLE_LOOP - 1, solange Clawd dasteht und nichts
 // streamt, sonst -1. Der Takt läuft immer mit, schreibt aber nur, wenn er etwas zu zeigen hat.
 const idle = atom({ plugin: 'burn', key: 'idle' } as const, -1)
@@ -382,13 +393,39 @@ async function idleTick($: EngineInterface) {
   await update($, idle, () => idleNow)
 }
 
+// Ein Bild weiter im Ablauf; beim Tippen wartet der Takt, in der Ruhe hört er auf, außer es
+// kam inzwischen wieder Arbeit.
+async function deskTick($: EngineInterface) {
+  const at = await $.clock.now()
+  if (deskNow === DESK.typing && at < deskUntil) {
+    if (dripper === undefined) await update($, keys, i => i + 1)
+    return
+  }
+  deskNow = deskNow === DESK.rest && at < deskUntil ? DESK.wink : deskNow + 1
+  if (deskNow === DESK.rest && at >= deskUntil) {
+    desker?.cancel()
+    desker = undefined
+  }
+  await update($, desk, () => deskNow)
+}
+
+// Startet den Ablauf bei `from`, wenn er nicht schon läuft; nur am Wasserspender zu sehen.
+async function runDesk($: EngineInterface, from: number) {
+  if (ROLES[roleNow] !== 'tap') return
+  deskNow = from
+  await update($, desk, () => from)
+  desker ??= $.clock.every(DESK_TICK, () => void deskTick($).catch(() => undefined))
+}
+
 // Dreht den Hahn auf, solange etwas streamt; danach läuft das Wasser aus (siehe flowTick),
 // still zeichnet er nichts neu. Nach einer langen Pause kommt Clawd zuerst wieder angefahren.
 async function tap($: EngineInterface) {
   const at = await $.clock.now()
   if (inFlight > 0) {
-    if (dripper === undefined && at - lastActive >= PAUSE) await arrive($)
+    if (dripper === undefined && at - lastActive >= PAUSE) await arrive($, DESK.wink)
     lastActive = at
+    deskUntil = at + DESK_GRACE
+    if (desker === undefined) await runDesk($, DESK.wink)
     // Kommt gleich der nächste Strom, läuft das Wasser einfach weiter, ohne neu anzusetzen.
     isDraining = false
     if (dripper !== undefined) return
@@ -414,10 +451,16 @@ async function closeTap($: EngineInterface) {
 }
 
 // Startet die Anfahrt von vorn; der Takt zählt hoch und hört am Ende von selbst auf.
-async function arrive($: EngineInterface) {
+async function arrive($: EngineInterface, deskFrom = 0) {
   arriver?.cancel()
   arrivalNow = 0
   await update($, arrival, () => 0)
+  desker?.cancel()
+  desker = undefined
+  deskNow = DESK.rest
+  await update($, desk, () => DESK.rest)
+  deskUntil = (await $.clock.now()) + DESK_SHOW
+  await runDesk($, deskFrom)
   const length = arrivalLength(ROLES[roleNow] ?? 'tap')
   arriver = $.clock.every(ARRIVE_TICK, () => {
     arrivalNow = arrivalNow + 1 >= length ? -1 : arrivalNow + 1
@@ -1924,6 +1967,7 @@ export const register: Register = on => {
       mlPerSecond: await read($, mlps),
       keys: await read($, keys),
       ml: sessionOut * ML_PER_TOKEN,
+      desk: await read($, desk),
     }
     const tapColors = !isTerminal && (await read($, isLight)) ? PALETTE.light : PALETTE.dark
     const isTall = isTerminal && e.props.maxRows >= 3

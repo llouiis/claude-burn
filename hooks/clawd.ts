@@ -608,9 +608,11 @@ function coolerSvg(scene: Scene, colors: SceneColors): { back: string; front: st
 // Dusche: hinten das Rohr mit rotem Drehknopf, oben der Brausekopf über Clawd, unten die
 // Duschwanne. Das Wasser prasselt auf seinen Kopf und rinnt an ihm herab; er tippt weiter.
 // Der Dampf wird mit der Sitzung dichter, bis Clawd fast verschwindet.
-// Der Brausekopf hängt ganz oben am Rand (y 3 bis 4,2), mittig über Clawd; bis zu seinem Kopf
-// (y 12, beim Tippen y 14) fällt das Wasser weit frei, in VS Code vier Kästchen.
-const BRAUSE = { left: 13, right: 29, top: 3, y: 4.2, slant: 3 }
+// Oben am Rand führt der Arm (dunkel wie das Rohr) zum Duschkopf mittig über Clawd: eine helle
+// Glocke (y 3,6 bis 5,2) mit dunklem Rand und Düsen, aus denen das Wasser kommt. Bis zu seinem
+// Kopf (y 12, beim Tippen y 14) fällt es frei; in VS Code liegt der Arm in der obersten
+// Kästchenzeile, der Kopf darunter, dann drei Zeilen Luft.
+const BRAUSE = { left: 14, right: 28, top: 3.6, y: 5.2, rim: 0.5, slant: 3.5 }
 const BRAUSE_MID = (BRAUSE.left + BRAUSE.right) / 2
 const PIPE = { x: 38, width: 1.6 }
 const KNOB = { x: PIPE.x + 0.8, y: 18, r: 1.3 }
@@ -623,13 +625,16 @@ const RIVULETS = [11.5, 28.5]
 const DRIPS = [18, 24]
 const pipeShapes = (isLight: boolean): Shape[] => [
   [PIPE.x, 3, PIPE.width, SHOWER_FLOOR - 3, INK.concrete],
-  [BRAUSE_MID, 3, PIPE.x + PIPE.width - BRAUSE_MID, 1.2, INK.concreteTop],
+  [BRAUSE_MID, 3, PIPE.x + PIPE.width - BRAUSE_MID, 0.9, INK.concrete],
+  [BRAUSE_MID - 1.2, 3, 2.4, 1, INK.concreteTop],
   [0.5, SHOWER_FLOOR, PIPE.x + PIPE.width + 1.5, 1, isLight ? INK.concrete : TOWEL],
 ]
 function showerBackSvg(colors: SceneColors): string {
   return (
     crisp(pxOf(pipeShapes(colors.isLight === true))) +
     `<path d="M${BRAUSE.left} ${BRAUSE.y} L${BRAUSE.right} ${BRAUSE.y} L${BRAUSE.right - BRAUSE.slant} ${BRAUSE.top} L${BRAUSE.left + BRAUSE.slant} ${BRAUSE.top} Z" fill="${INK.concreteTop}"/>` +
+    px(BRAUSE.left, BRAUSE.y - BRAUSE.rim, BRAUSE.right - BRAUSE.left, BRAUSE.rim, INK.concrete) +
+    STREAMS.map(x => `<circle cx="${x}" cy="${BRAUSE.y - BRAUSE.rim / 2}" r="0.25" fill="${INK.ink}"/>`).join('') +
     `<circle cx="${KNOB.x}" cy="${KNOB.y}" r="${KNOB.r}" fill="${INK.red}"/>`
   )
 }
@@ -846,7 +851,7 @@ export function scenePixels(scene: Scene, colors: SceneColors): Pixels {
   } else {
     // Rohr, Brausekopf, Duschwanne; der Dampf zieht hinter Clawd, das Gesicht bleibt frei.
     p.shapes(pipeShapes(isLight), 3)
-    p.rect(BRAUSE.left, BRAUSE.top, BRAUSE.right - BRAUSE.left, BRAUSE.y - BRAUSE.top, INK.concreteTop, 3)
+    p.rect(BRAUSE.left, 4, BRAUSE.right - BRAUSE.left, 2, INK.concreteTop, 3)
     p.oval(KNOB.x, KNOB.y, KNOB.r, KNOB.r, INK.red, 2)
     const puff = isLight ? INK.concrete : '#FFFFFF'
     for (const [x, y, r] of STEAM_PUFFS.slice(0, Math.min(10, level))) {

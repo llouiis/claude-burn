@@ -920,13 +920,13 @@ test('the steam leaves Clawds face free, arrivals fade in at the edge', () => {
       expect({ x, y, free: dx * dx + dy * dy >= r * r }).toEqual({ x, y, free: true })
     }
   }
-  // Der Brausekopf hängt ganz oben, ein gutes Stück über Clawds Kopf, ob er steht oder tippt.
+  // Der Duschkopf hängt ganz oben unter dem Arm, ein gutes Stück über Clawds Kopf, ob er steht oder tippt.
   for (const water of [null, FLOWS[2]?.[0] ?? null]) {
     const shower = sceneSvg({ role: 'shower', water, strength: water === null ? 0 : 2, tick: 0, level: 0, arrival: -1 }, colors)
-    const brause = Number(/<path d="M[\d.]+ ([\d.]+) L[\d.]+ [\d.]+ L[\d.]+ 3 /.exec(shower)?.[1])
+    const brause = Number(/<path d="M[\d.]+ ([\d.]+) L[\d.]+ [\d.]+ L[\d.]+ 3.6 /.exec(shower)?.[1])
     const head = Math.min(...[...shower.matchAll(/<rect x="[\d.]+" y="([\d.]+)" [^>]*fill="#D97757"/g)].map(m => Number(m[1])))
-    expect(brause).toBeLessThanOrEqual(5)
-    expect(head - brause).toBeGreaterThanOrEqual(7.5)
+    expect(brause).toBeLessThanOrEqual(5.5)
+    expect(head - brause).toBeGreaterThanOrEqual(6.5)
   }
   // Er macht es sich nicht mehr bequem: auch bei vielen Litern steht er am Laptop.
   const busy = sceneSvg({ role: 'tap', water: null, strength: 0, tick: 0, level: 4, arrival: -1 }, colors)

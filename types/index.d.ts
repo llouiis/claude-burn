@@ -60,9 +60,13 @@ declare module 'claude-code' {
       flow: number
       // Milliliter pro Sekunde, solange gestreamt wird (der Strahl am Hahn)
       mlps: number
+      // Anschläge auf dem Laptop, gezählt im Takt der Tokens pro Sekunde
+      keys: number
       role: number
       arrival: number
       idle: number
+      // Das Bild im Ablauf am Wasserspender (einblenden, zwinkern, tippen, einpacken)
+      desk: number
       isLight: boolean
       context: Shaped<ContextInfo | null>
     }

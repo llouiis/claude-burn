@@ -398,6 +398,49 @@ test('the desktop app keeps its Svg, VS Code gets none at any width', async ($, 
   }
 })
 
+test('the mobile app draws the bar like the desktop app at every width, Clawd and bar as Svg', async ($, on) => {
+  engine(on)
+  await $.session.start({ cwd: '/', surface: 'mobile', isInteractive: true })
+  await $.session.measure(measure)
+  await $.command.run({ command: 'clawd', args: 'spender' })
+
+  // Ein Handy hochkant hat rund 40 bis 60 Zeichen, quer und auf dem Tablet mehr.
+  for (let bodyColumns = 36; bodyColumns <= 140; bodyColumns += 4) {
+    const props = { ...BAND.props, bodyColumns }
+    const mobile = await $.ui.mount({ ...BAND, props, surface: 'mobile' })
+    const desktop = await $.ui.mount({ ...BAND, props, surface: 'desktop' })
+    // Gleich bis auf die Handles der Knöpfe, die jede Zeichnung neu vergibt.
+    const tree = async (ui: Drawn) => JSON.stringify(await ui.drawn()).replace(/"handle":\d+/g, '"handle":0')
+    expect({ bodyColumns, tree: await tree(mobile) }).toEqual({ bodyColumns, tree: await tree(desktop) })
+    expect({ bodyColumns, cells: fits(cells((await mobile.drawn()) as Node), bodyColumns) }).toEqual({ bodyColumns, cells: true })
+    // Die Zahlen stehen immer da, Clawd ab 51 Zeichen.
+    expect(textOf((await mobile.drawn()) as Node)).toContain('34%')
+    expect(await mobile.find({ key: 'live' })).toBeDefined()
+    expect({ bodyColumns, clawd: (await clawdSvg(mobile)) !== undefined }).toEqual({ bodyColumns, clawd: bodyColumns >= 51 })
+    await mobile.unmount()
+    await desktop.unmount()
+  }
+})
+
+test('/tokens status tells which surfaces asked for the bar, how wide, and whether it stood', async ($, on) => {
+  engine(on)
+  await $.session.start({ cwd: '/', surface: 'mobile', isInteractive: true })
+  await $.session.measure(measure)
+
+  const before = (await $.command.run({ command: 'tokens', args: 'status' })) as { text: string }
+  expect(before.text).toContain('No surface has asked for the bar')
+  expect(before.text).toContain('Bar: on.')
+
+  const ui = await $.ui.mount({ ...BAND, props: { ...BAND.props, bodyColumns: 44 }, surface: 'mobile' })
+  await ui.drawn()
+  const after = (await $.command.run({ command: 'tokens', args: 'status' })) as { text: string }
+  expect(after.text).toContain('- mobile: asked just now at 44 columns, drawn.')
+  expect(after.text).not.toContain('No surface has asked')
+  // status schaltet die Leiste nicht um.
+  expect(await ui.find({ key: 'live' })).toBeDefined()
+  await ui.unmount()
+})
+
 test('the stats charts in the apps stay inside a narrow pane', async ($, on) => {
   engine(on)
   await $.session.start({ cwd: '/', surface: 'vscode', isInteractive: true })

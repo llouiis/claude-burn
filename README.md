@@ -39,9 +39,23 @@ claude plugin update burn@claude-burn
 
 Danach Claude Code neu starten.
 
+## Oberflächen und Cloud-Sessions
+
+Burn zeichnet überall, wo Claude Code Mods eine Zeile über dem Eingabefeld gibt: im Terminal, in der Desktop-App, in VS Code und in der mobilen Claude-App. Die mobile App zeichnet die Leiste wie die Desktop-App, mit Balken und Clawd als Svg, und richtet sich ebenso nach der Breite: Hochkant (rund 40 bis 60 Zeichen) wird Clawd erst kleiner und rückt mit dem Zähler unter die Limits, unter rund 51 Zeichen tritt er beiseite, und es bleiben Limits und Zähler.
+
+Eine Cloud-Session (im Browser auf claude.ai/code oder in der App geöffnet) lädt Burn, wenn das Setup-Skript der Cloud-Umgebung es installiert:
+
+```bash
+claude plugin marketplace add llouiis/claude-burn
+claude plugin install burn@claude-burn
+```
+
+Erscheint die Leiste dort nicht, zeigt `/tokens status`, woran es liegt: welche Oberflächen angehängt sind, ob und wie breit jede zuletzt nach der Leiste gefragt hat und ob sie stand oder mit welchem Fehler sie scheiterte. Hat keine Oberfläche gefragt, zeichnet diese App Zeilen von Mods über dem Eingabefeld noch nicht; an Burn liegt es dann nicht.
+
 ## Befehle
 
 - `/tokens` blendet die Leiste aus und ein.
+- `/tokens status` sagt, auf welchen Oberflächen Burn läuft und ob die Leiste dort steht (siehe oben).
 - `/tokenstats` öffnet Usage, Stats und Context im Stil von `/usage`.
 - `/clawd` wechselt Clawds Rolle; `/clawd spender` (oder `hahn`) und `/clawd dusche` wählen eine bestimmte.
 

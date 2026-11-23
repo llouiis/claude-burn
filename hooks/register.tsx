@@ -2,7 +2,9 @@ import { atom, read, update } from 'claude-code'
 import type {
   EngineInterface,
   ModelUsage,
+  Next,
   Register,
+  RenderInput,
   SessionContextUsage,
   SessionCost,
   SessionRateLimit,
@@ -88,6 +90,49 @@ let streamedNow = 0
 // Solange eine fertige Antwort ins Kassenbuch geht, wartet der Takt mit dem Schreiben.
 let isSettling = false
 let ticker: { cancel: () => void } | undefined
+
+// Je Oberfläche (terminal, desktop, vscode, mobile oder ein Name, den dieser Build noch nicht
+// kennt): wann und wie breit sie die Leiste zuletzt angefragt hat und was daraus wurde.
+const bandSeen = new Map<string, { columns: number; at: number; outcome: string }>()
+// Hat die Oberfläche eine Elementtabelle, aus der sich zeichnen lässt?
+const hasElements = <T,>(elements: T): elements is NonNullable<T> =>
+  typeof elements === 'object' && elements !== null && 'Box' in elements && 'Text' in elements
+// Was eine Oberfläche oder ein älterer Build nicht kann, soll den Statusbericht nicht kippen:
+// manche Aufrufe fehlen ganz und werfen schon beim Aufruf, nicht erst im Promise.
+const settle = async <T,>(read: () => Promise<T>, fallback: T): Promise<T> => {
+  try {
+    return await read()
+  } catch {
+    return fallback
+  }
+}
+const agoText = (ms: number) =>
+  ms < 1500 ? 'just now' : ms < 90_000 ? `${Math.round(ms / 1000)} s ago` : `${Math.round(ms / 60_000)} min ago`
+
+// /tokens status: wo Burn läuft und ob die Oberflächen nach der Leiste fragen.
+async function statusText($: EngineInterface): Promise<string> {
+  const at = await $.clock.now()
+  const version = await settle(
+    async () => String((JSON.parse(await $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`)) as { version?: unknown }).version ?? '?'),
+    '?',
+  )
+  const host = await settle(async () => (await $.session.version()).version, '?')
+  const info = await settle(async () => await $.session.info(), null)
+  const surfaces = await settle(async (): Promise<readonly string[]> => await $.session.surfaces(), [])
+  const lines = [
+    `Burn ${version} in Claude Code ${host}${info?.isHosted === true ? ', hosted cloud session' : ''} (${info?.platform ?? '?'}).`,
+    `Surfaces attached: ${surfaces.length === 0 ? 'none' : surfaces.join(', ')}.`,
+    `Bar: ${(await read($, isHidden)) ? 'hidden, /tokens shows it' : 'on'}.`,
+  ]
+  if (bandSeen.size === 0) {
+    lines.push('No surface has asked for the bar since Burn loaded: this app does not draw rows of mods above the prompt yet.')
+  }
+  for (const [surface, seen] of bandSeen) {
+    lines.push(`- ${surface}: asked ${agoText(at - seen.at)} at ${seen.columns} columns, ${seen.outcome}.`)
+  }
+
+  return lines.join('\n')
+}
 const TICK = 110
 // Clawd neben dem Preis, in der Rolle, die diese Sitzung ausgelost hat (siehe clawd.ts).
 // Wasser kommt nur, solange gestreamt wird, und umso mehr, je mehr Tokens pro Sekunde kommen:
@@ -910,7 +955,7 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'tokens',
-      description: 'Show or hide the usage bar above the prompt',
+      description: 'Show or hide the usage bar above the prompt; /tokens status tells where it draws',
     })
     await $.command.register({
       name: 'tokenstats',
@@ -987,7 +1032,9 @@ export const register: Register = on => {
     return { text: `Clawd: ${ROLES[next]}.` }
   })
 
-  on('command.run', { command: 'tokens' }, async $ => {
+  on('command.run', { command: 'tokens' }, async ($, e) => {
+    if (['status', 'info', 'debug'].includes((e.args ?? '').trim().toLowerCase())) return { text: await statusText($) }
+
     const wasHidden = await read($, isHidden)
     await update($, isHidden, () => !wasHidden)
 
@@ -1081,8 +1128,9 @@ export const register: Register = on => {
   })
 
   // Das Fenster: Usage und Stats wie /usage, Zeile für Zeile.
-  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
     const elements = $.ui.resolve(e)
+    if (!hasElements(elements)) return next(e)
     const { Box, Button, Text } = elements
     // VS Code rastert jedes Svg in einem eigenen iframe, das hier nicht zeichnet: dann bliebe
     // nur der alt-Text. Dort also Balken aus Box und Heatmap und Diagramm als Text.
@@ -1899,524 +1947,544 @@ export const register: Register = on => {
     )
   })
 
-  // Die Leiste über dem Eingabefeld: eine Ansicht, weiterschalten, Usage, live rechts.
+  // Je Oberfläche gemerkt: wann und wie breit sie zuletzt gefragt hat und ob die Leiste stand.
+  // So zeigt /tokens status auch im Browser und auf dem Handy, woran es liegt (siehe Issue #1).
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    if (e.props.hasSurvey || (await read($, isHidden))) return next(e)
+    const asked = { columns: e.props.bodyColumns, at: await $.clock.now() }
+    const surface = String(e.surface)
+    bandSeen.set(surface, { ...asked, outcome: 'asked' })
+    try {
+      const tree = await drawBand($, e, next)
+      bandSeen.set(surface, { ...asked, outcome: 'drawn' })
 
-    const elements = $.ui.resolve(e)
-    const { Box, Button, Text } = elements
-    // VS Code rastert jedes Svg in einem eigenen iframe, das hier nicht zeichnet (es meldet sich
-    // nicht rechtzeitig, dann steht der alt-Text da). Dort ist der Balken eine Box und Clawd
-    // Text wie im Terminal; die Desktop-App behält ihre Svg.
-    const Svg = e.surface !== 'vscode' && 'Svg' in elements ? elements.Svg : undefined
-    const isTerminal = e.surface === 'terminal'
-    const isTextApp = !isTerminal && Svg === undefined
-    const nowMs = (await read($, now)) || (await $.clock.now())
-
-    // Ganz rechts: Tokens live, ein Klick wechselt Session, 24h, 7d, 30d, Gesamt.
-    const totals = await read($, live)
-    const span = SPANS[(await read($, liveSpan)) % SPANS.length] ?? SPANS[0]
-    const costs = await read($, liveCost)
-    // Der Preis steht nur, wenn er den ganzen Zeitraum abdeckt.
-    const liveMoney =
-      costFrom(span.key, trackedSince, nowMs, berlinDay) === true ? `$${costs[span.key].toFixed(2)}` : ''
-    const inFlight = await read($, streamed)
-    const behindBy = await read($, lag)
-    const liveTotal = Math.max(0, totals[span.key] + inFlight - behindBy)
-    const liveValue = liveCount(liveTotal)
-    // ↓ wie im Spinner, solange eine Antwort hereinkommt.
-    const liveArrow = inFlight > 0 ? '↓ ' : ''
-    const liveRest = ` tokens · ${span.label} ›`
-    // Fest reserviert, mit Pfeil und der längsten Zahl: so bricht die Leiste beim
-    // Hochzählen nicht um, und die Details links wechseln nicht mit dem Zählerstand.
-    const liveRoomOf = (withMoney: boolean) =>
-      (liveMoney === '' || !withMoney ? 0 : '$000.00 · '.length) + '↓ '.length + liveRoomFor(Math.max(liveTotal, totals.all)) + liveRest.length
-    const liveRoom = liveRoomOf(true)
-    // Clawd steht in beiden Zuständen gleich breit da (dafür zwei Leerzeichen weniger davor).
-    // Er kommt nur, wenn links dafür nichts wegfallen muss.
-    const tapRoom = TAP_WIDTH - 1
-    const canTap = e.props.bodyColumns >= TAP_MIN_COLUMNS
-    const arrivalAt = await read($, arrival)
-    // Das Wasser läuft, solange der Hahn offen ist: beim Streamen und noch kurz danach, bis es ausgelaufen ist.
-    const flowAt = await read($, flow)
-    const isDripping = flowAt >= 0 && arrivalAt < 0
-    const strength = Math.max(0, flowAt)
-    const frames = FLOWS[strength] ?? FLOWS[0] ?? [RESTING]
-    const roleAt = ROLES[(await read($, role)) % ROLES.length] ?? 'tap'
-    // Im Leerlauf tickt die Szene im eigenen Takt, und am Hahn fällt ab und zu ein Tropfen.
-    const idleAt = isDripping || arrivalAt >= 0 ? -1 : await read($, idle)
-    const water = isDripping
-      ? (frames[(await read($, drip)) % frames.length] ?? RESTING)
-      : idleAt >= 0 && roleAt === 'tap'
-        ? idleDrip(idleAt)
-        : null
-    // Die Liter wie der Zähler (Session, 24h, ...); am Hahn die Bequemlichkeit nach der Sitzung.
-    const isTap = roleAt === 'tap'
-    const outs = await read($, liveOut)
-    const sessionOut = (await read($, tokens)).output + inFlight
-    const liters = literText((outs[span.key] + inFlight) * ML_PER_TOKEN)
-    const scene = {
-      role: roleAt,
-      water,
-      strength,
-      tick: idleAt >= 0 ? idleAt : await read($, drip),
-      idle: idleAt,
-      level: isTap ? tapLevel(sessionOut * ML_PER_TOKEN) : sizeLevel(Math.max(0, totals.session + inFlight - behindBy)),
-      liters,
-      arrival: arrivalAt,
-      mlPerSecond: await read($, mlps),
-      keys: await read($, keys),
-      ml: sessionOut * ML_PER_TOKEN,
-      desk: await read($, desk),
+      return tree
+    } catch (error) {
+      bandSeen.set(surface, { ...asked, outcome: `failed: ${error instanceof Error ? error.message : String(error)}` })
+      throw error
     }
-    const tapColors = !isTerminal && (await read($, isLight)) ? PALETTE.light : PALETTE.dark
-    const isTall = isTerminal && e.props.maxRows >= 3
-    const pieces = (list: Piece[]) =>
-      list.map((p, i) => (
-        <Text key={i} color={p.color} dimColor={p.dim}>
-          {nb(p.text)}
-        </Text>
-      ))
-    // Im Terminal stehen unter dem Kopf zwei Zeilen. Rechts davon läuft die Szene in den
-    // Leerraum unter dem Zähler, höchstens so breit wie er; links fährt das Auto heran.
-    const liveWidth =
-      (liveMoney === '' ? 0 : liveMoney.length + ' · '.length) + liveArrow.length + liveValue.length + liveRest.length
-    const reach = 1 + liveWidth
-    const lane = !isWalking(roleAt, arrivalAt) ? 0 : Math.max(0, Math.min(24, e.props.bodyColumns - 6 - TAP_WIDTH - reach))
-    const drawn = isTerminal ? terminalScene(scene, lane, reach) : null
-    // VS Code: jede Pixelzeile eine Box, darin je Lauf gleicher Farbe eine Box (leer, wo nichts
-    // ist). nowrap, sonst bräche VS Code eine Zeile um; so bleiben es rund 130 Knoten.
-    const pixelPart = (scale: number) => {
-      const size = pixelSize(scale)
-      const across = (n: number) => Math.round(n * size.width * 1000) / 1000
+  })
+}
 
-      return (
-        <Box key="hahn" flexDirection="column" width={across(PIXEL_GRID.cols)} flexShrink={0}>
-          {scenePixels(scene, tapColors).map(row => {
-            const runs: { color: string | null; n: number }[] = []
-            for (const color of row.slice(0, row.findLastIndex(c => c !== null) + 1)) {
-              const last = runs[runs.length - 1]
-              if (last !== undefined && last.color === color) last.n += 1
-              else runs.push({ color, n: 1 })
-            }
+// Die Leiste über dem Eingabefeld: eine Ansicht, weiterschalten, Usage, live rechts.
+async function drawBand($: EngineInterface, e: RenderInput<'AbovePrompt'>, next: Next<'ui.render'>) {
+  if (e.props.hasSurvey || (await read($, isHidden))) return next(e)
 
-            return (
-              <Box flexDirection="row" flexWrap="nowrap" height={size.height}>
-                {runs.map(run =>
-                  run.color === null ? (
-                    <Box width={across(run.n)} height={size.height} flexShrink={0} />
-                  ) : (
-                    <Box width={across(run.n)} height={size.height} flexShrink={0} backgroundColor={run.color} />
-                  ),
-                )}
-              </Box>
-            )
-          })}
-        </Box>
-      )
-    }
-    // In den Apps 2-fach oder, wenn es eng wird, 1,5-fach (siehe appPlan); in VS Code aus
-    // Box-Pixeln, groß oder klein.
-    const tapPart = (scale = APP_LARGE) =>
-      !isTerminal && Svg !== undefined ? (
-        <Svg
-          key="hahn"
-          alt={sceneAlt(scene)}
-          width={appScene(scale).width}
-          height={appScene(scale).height}
-          source={sceneSvg(scene, tapColors)}
-        />
-      ) : isTextApp ? (
-        pixelPart(scale)
-      ) : (
-      // Mit drei Zeilen steht hier der Kopf, sonst Clawd selbst.
-      <Box key="hahn">
-        <Text size="footnote" mono>
-          {pieces(drawn === null ? [] : isTall ? drawn.head : drawn.flat)}
-        </Text>
+  const elements = $.ui.resolve(e)
+  // Eine Oberfläche, die dieser Build noch nicht kennt, hat womöglich keine Tabelle: dann lieber
+  // nichts zeichnen als den ganzen Hook scheitern lassen.
+  if (!hasElements(elements)) return next(e)
+  const { Box, Button, Text } = elements
+  // VS Code rastert jedes Svg in einem eigenen iframe, das hier nicht zeichnet (es meldet sich
+  // nicht rechtzeitig, dann steht der alt-Text da). Dort ist der Balken eine Box und Clawd
+  // Text wie im Terminal; die Desktop-App behält ihre Svg.
+  const Svg = e.surface !== 'vscode' && 'Svg' in elements ? elements.Svg : undefined
+  const isTerminal = e.surface === 'terminal'
+  const isTextApp = !isTerminal && Svg === undefined
+  const nowMs = (await read($, now)) || (await $.clock.now())
+
+  // Ganz rechts: Tokens live, ein Klick wechselt Session, 24h, 7d, 30d, Gesamt.
+  const totals = await read($, live)
+  const span = SPANS[(await read($, liveSpan)) % SPANS.length] ?? SPANS[0]
+  const costs = await read($, liveCost)
+  // Der Preis steht nur, wenn er den ganzen Zeitraum abdeckt.
+  const liveMoney =
+    costFrom(span.key, trackedSince, nowMs, berlinDay) === true ? `$${costs[span.key].toFixed(2)}` : ''
+  const inFlight = await read($, streamed)
+  const behindBy = await read($, lag)
+  const liveTotal = Math.max(0, totals[span.key] + inFlight - behindBy)
+  const liveValue = liveCount(liveTotal)
+  // ↓ wie im Spinner, solange eine Antwort hereinkommt.
+  const liveArrow = inFlight > 0 ? '↓ ' : ''
+  const liveRest = ` tokens · ${span.label} ›`
+  // Fest reserviert, mit Pfeil und der längsten Zahl: so bricht die Leiste beim
+  // Hochzählen nicht um, und die Details links wechseln nicht mit dem Zählerstand.
+  const liveRoomOf = (withMoney: boolean) =>
+    (liveMoney === '' || !withMoney ? 0 : '$000.00 · '.length) + '↓ '.length + liveRoomFor(Math.max(liveTotal, totals.all)) + liveRest.length
+  const liveRoom = liveRoomOf(true)
+  // Clawd steht in beiden Zuständen gleich breit da (dafür zwei Leerzeichen weniger davor).
+  // Er kommt nur, wenn links dafür nichts wegfallen muss.
+  const tapRoom = TAP_WIDTH - 1
+  const canTap = e.props.bodyColumns >= TAP_MIN_COLUMNS
+  const arrivalAt = await read($, arrival)
+  // Das Wasser läuft, solange der Hahn offen ist: beim Streamen und noch kurz danach, bis es ausgelaufen ist.
+  const flowAt = await read($, flow)
+  const isDripping = flowAt >= 0 && arrivalAt < 0
+  const strength = Math.max(0, flowAt)
+  const frames = FLOWS[strength] ?? FLOWS[0] ?? [RESTING]
+  const roleAt = ROLES[(await read($, role)) % ROLES.length] ?? 'tap'
+  // Im Leerlauf tickt die Szene im eigenen Takt, und am Hahn fällt ab und zu ein Tropfen.
+  const idleAt = isDripping || arrivalAt >= 0 ? -1 : await read($, idle)
+  const water = isDripping
+    ? (frames[(await read($, drip)) % frames.length] ?? RESTING)
+    : idleAt >= 0 && roleAt === 'tap'
+      ? idleDrip(idleAt)
+      : null
+  // Die Liter wie der Zähler (Session, 24h, ...); am Hahn die Bequemlichkeit nach der Sitzung.
+  const isTap = roleAt === 'tap'
+  const outs = await read($, liveOut)
+  const sessionOut = (await read($, tokens)).output + inFlight
+  const liters = literText((outs[span.key] + inFlight) * ML_PER_TOKEN)
+  const scene = {
+    role: roleAt,
+    water,
+    strength,
+    tick: idleAt >= 0 ? idleAt : await read($, drip),
+    idle: idleAt,
+    level: isTap ? tapLevel(sessionOut * ML_PER_TOKEN) : sizeLevel(Math.max(0, totals.session + inFlight - behindBy)),
+    liters,
+    arrival: arrivalAt,
+    mlPerSecond: await read($, mlps),
+    keys: await read($, keys),
+    ml: sessionOut * ML_PER_TOKEN,
+    desk: await read($, desk),
+  }
+  const tapColors = !isTerminal && (await read($, isLight)) ? PALETTE.light : PALETTE.dark
+  const isTall = isTerminal && e.props.maxRows >= 3
+  const pieces = (list: Piece[]) =>
+    list.map((p, i) => (
+      <Text key={i} color={p.color} dimColor={p.dim}>
+        {nb(p.text)}
+      </Text>
+    ))
+  // Im Terminal stehen unter dem Kopf zwei Zeilen. Rechts davon läuft die Szene in den
+  // Leerraum unter dem Zähler, höchstens so breit wie er; links fährt das Auto heran.
+  const liveWidth =
+    (liveMoney === '' ? 0 : liveMoney.length + ' · '.length) + liveArrow.length + liveValue.length + liveRest.length
+  const reach = 1 + liveWidth
+  const lane = !isWalking(roleAt, arrivalAt) ? 0 : Math.max(0, Math.min(24, e.props.bodyColumns - 6 - TAP_WIDTH - reach))
+  const drawn = isTerminal ? terminalScene(scene, lane, reach) : null
+  // VS Code: jede Pixelzeile eine Box, darin je Lauf gleicher Farbe eine Box (leer, wo nichts
+  // ist). nowrap, sonst bräche VS Code eine Zeile um; so bleiben es rund 130 Knoten.
+  const pixelPart = (scale: number) => {
+    const size = pixelSize(scale)
+    const across = (n: number) => Math.round(n * size.width * 1000) / 1000
+
+    return (
+      <Box key="hahn" flexDirection="column" width={across(PIXEL_GRID.cols)} flexShrink={0}>
+        {scenePixels(scene, tapColors).map(row => {
+          const runs: { color: string | null; n: number }[] = []
+          for (const color of row.slice(0, row.findLastIndex(c => c !== null) + 1)) {
+            const last = runs[runs.length - 1]
+            if (last !== undefined && last.color === color) last.n += 1
+            else runs.push({ color, n: 1 })
+          }
+
+          return (
+            <Box flexDirection="row" flexWrap="nowrap" height={size.height}>
+              {runs.map(run =>
+                run.color === null ? (
+                  <Box width={across(run.n)} height={size.height} flexShrink={0} />
+                ) : (
+                  <Box width={across(run.n)} height={size.height} flexShrink={0} backgroundColor={run.color} />
+                ),
+              )}
+            </Box>
+          )
+        })}
       </Box>
     )
-    const underRow = (key: string, sceneKey: string, row: { left: Piece[]; slot: Piece[]; right: Piece[] }) => (
-      <Box key={key} flexDirection="row">
-        <Box flexGrow={1} />
-        {lane > 0 && <Text mono>{pieces(row.left)}</Text>}
-        <Text mono>{pieces(row.slot)}</Text>
-        <Box key={sceneKey}>
-          <Text mono>{pieces(row.right)}</Text>
-        </Box>
+  }
+  // In den Apps 2-fach oder, wenn es eng wird, 1,5-fach (siehe appPlan); in VS Code aus
+  // Box-Pixeln, groß oder klein.
+  const tapPart = (scale = APP_LARGE) =>
+    !isTerminal && Svg !== undefined ? (
+      <Svg
+        key="hahn"
+        alt={sceneAlt(scene)}
+        width={appScene(scale).width}
+        height={appScene(scale).height}
+        source={sceneSvg(scene, tapColors)}
+      />
+    ) : isTextApp ? (
+      pixelPart(scale)
+    ) : (
+    // Mit drei Zeilen steht hier der Kopf, sonst Clawd selbst.
+    <Box key="hahn">
+      <Text size="footnote" mono>
+        {pieces(drawn === null ? [] : isTall ? drawn.head : drawn.flat)}
+      </Text>
+    </Box>
+  )
+  const underRow = (key: string, sceneKey: string, row: { left: Piece[]; slot: Piece[]; right: Piece[] }) => (
+    <Box key={key} flexDirection="row">
+      <Box flexGrow={1} />
+      {lane > 0 && <Text mono>{pieces(row.left)}</Text>}
+      <Text mono>{pieces(row.slot)}</Text>
+      <Box key={sceneKey}>
+        <Text mono>{pieces(row.right)}</Text>
+      </Box>
+    </Box>
+  )
+  const under = (hasTap: boolean) =>
+    isTall && hasTap && drawn !== null
+      ? [
+          underRow('clawd', 'strahl', drawn.rows[0] ?? { left: [], slot: [], right: [] }),
+          underRow('beine', 'pfuetze', drawn.rows[1] ?? { left: [], slot: [], right: [] }),
+        ]
+      : null
+  const withUnder = <T,>(hasTap: boolean, row: T) => {
+    const rows = under(hasTap)
+    if (rows === null) return row
+
+    return (
+      <Box flexDirection="column">
+        {row}
+        {rows}
       </Box>
     )
-    const under = (hasTap: boolean) =>
-      isTall && hasTap && drawn !== null
-        ? [
-            underRow('clawd', 'strahl', drawn.rows[0] ?? { left: [], slot: [], right: [] }),
-            underRow('beine', 'pfuetze', drawn.rows[1] ?? { left: [], slot: [], right: [] }),
-          ]
-        : null
-    const withUnder = <T,>(hasTap: boolean, row: T) => {
-      const rows = under(hasTap)
-      if (rows === null) return row
-
-      return (
-        <Box flexDirection="column">
-          {row}
-          {rows}
-        </Box>
-      )
-    }
-    // In den Apps stehen die Liter neben Clawd, im Terminal zeichnet sie die Szene. Kräftig und
-    // halbfett, damit man sie auch in VS Code gut liest.
-    const literPart =
-      !isTerminal ? (
-        <Text key="liter" size="footnote" color={tapColors.water} weight="semibold" tabular>
-          {nb(liters === '' ? '' : ` ${liters}`)}
-        </Text>
-      ) : null
-    // Im Terminal ist der ganze Zähler der Knopf.
-    const livePart = (hasTap: boolean) => [
-      <Box flexGrow={1} />,
-      <Text>{nb(hasTap ? ' ' : '   ')}</Text>,
-      hasTap ? tapPart() : null,
-      hasTap ? literPart : null,
-      hasTap ? <Text>{nb(' ')}</Text> : null,
-      <Button
-        key="live"
-        plain
-        onPress={async () => {
-          await update($, liveSpan, i => (i + 1) % SPANS.length)
-          await publish($, true)
-        }}
-      >
-        {liveMoney !== '' && (
-          <Text size="footnote" color="claude" tabular>
-            {liveMoney}
-          </Text>
-        )}
-        {liveMoney !== '' && <Text size="footnote" dimColor>{nb(' · ')}</Text>}
-        {liveArrow !== '' && <Text size="footnote" dimColor>{nb(liveArrow)}</Text>}
+  }
+  // In den Apps stehen die Liter neben Clawd, im Terminal zeichnet sie die Szene. Kräftig und
+  // halbfett, damit man sie auch in VS Code gut liest.
+  const literPart =
+    !isTerminal ? (
+      <Text key="liter" size="footnote" color={tapColors.water} weight="semibold" tabular>
+        {nb(liters === '' ? '' : ` ${liters}`)}
+      </Text>
+    ) : null
+  // Im Terminal ist der ganze Zähler der Knopf.
+  const livePart = (hasTap: boolean) => [
+    <Box flexGrow={1} />,
+    <Text>{nb(hasTap ? ' ' : '   ')}</Text>,
+    hasTap ? tapPart() : null,
+    hasTap ? literPart : null,
+    hasTap ? <Text>{nb(' ')}</Text> : null,
+    <Button
+      key="live"
+      plain
+      onPress={async () => {
+        await update($, liveSpan, i => (i + 1) % SPANS.length)
+        await publish($, true)
+      }}
+    >
+      {liveMoney !== '' && (
         <Text size="footnote" color="claude" tabular>
-          {liveValue}
+          {liveMoney}
         </Text>
-        <Text size="footnote" dimColor>{nb(liveRest)}</Text>
-      </Button>,
+      )}
+      {liveMoney !== '' && <Text size="footnote" dimColor>{nb(' · ')}</Text>}
+      {liveArrow !== '' && <Text size="footnote" dimColor>{nb(liveArrow)}</Text>}
+      <Text size="footnote" color="claude" tabular>
+        {liveValue}
+      </Text>
+      <Text size="footnote" dimColor>{nb(liveRest)}</Text>
+    </Button>,
+  ]
+
+  // Die Apps, desktop und vscode gleich und nur nach der Breite, in einer Zeile:
+  // erst kürzen sich die Details, dann wird Clawd kleiner (2-fach, 1,5-fach, im schmalen Panel 1-fach),
+  // dann geht der Preis, erst dann die Liter. Die Liter bleiben also, solange es geht: das
+  // Seitenpanel von VS Code ist selten breiter als 100 Zeichen. Passt nicht alles in die Zeile,
+  // rückt der Zähler mit ihm unter die Limits; erst wenn selbst das nicht passt, tritt er
+  // beiseite. Jede Stufe passt auch bei jeder größeren Breite, und es gilt die erste, die
+  // passt: so zeigt ein breiteres Fenster Clawd nie kleiner als ein schmaleres.
+  // Das Terminal rechnet weiter wie unten.
+  type AppPlan = {
+    detail: string | undefined
+    hasTap: boolean
+    // 0 ohne Clawd, sonst seine Größe zum viewBox
+    scale: number
+    withMoney: boolean
+    withLiters: boolean
+    isStacked: boolean
+  }
+  const APP_STEPS = [
+    { scale: APP_LARGE, withMoney: true, withLiters: true },
+    { scale: APP_SMALL, withMoney: true, withLiters: true },
+    { scale: APP_SMALL, withMoney: false, withLiters: true },
+    { scale: APP_SMALL, withMoney: true, withLiters: false },
+    { scale: APP_SMALL, withMoney: false, withLiters: false },
+    ...APP_TINY_SCALES.flatMap(scale => [
+      { scale, withMoney: true, withLiters: true },
+      { scale, withMoney: false, withLiters: true },
+      { scale, withMoney: true, withLiters: false },
+      { scale, withMoney: false, withLiters: false },
+    ]),
+    { scale: 0, withMoney: true, withLiters: false },
+    { scale: 0, withMoney: false, withLiters: false },
+  ] as const
+  type AppStep = (typeof APP_STEPS)[number]
+  const appRoom = e.props.bodyColumns - 1 - APP_SLACK
+  const appLive = (step: AppStep) =>
+    appText((step.scale > 0 ? 3 : 2) + liveRoomOf(step.withMoney) + (step.withLiters ? LITER_WIDTH : 0)) +
+    (step.scale === 0
+      ? 0
+      : isTextApp
+        ? appCells(PIXEL_GRID.cols * pixelSize(step.scale).width * APP_CH_PX)
+        : appCells(appScene(step.scale).width))
+  const appPlan = (left: (detail: string | undefined) => number, details: string[]): AppPlan => {
+    const options = [...details, undefined]
+    const inRow = (step: AppStep): AppPlan | null => {
+      const at = options.findIndex(d => left(d) + appLive(step) <= appRoom)
+
+      return at < 0 ? null : { detail: options[at], ...step, hasTap: step.scale > 0, isStacked: false }
+    }
+    // Gestapelt steht Clawd klein, damit die Leiste flach bleibt; im ganz schmalen Panel
+    // winzig, statt zu gehen (VS Code ist oft so schmal).
+    // Die Liter stehen gestapelt über dem Zähler neben Clawd und kosten keine Breite.
+    const stacked = (step: AppStep): AppPlan | null =>
+      appLive({ ...step, withLiters: step.withLiters && step.scale === 0 }) <= appRoom
+        ? { detail: options.find(d => left(d) <= appRoom), ...step, hasTap: step.scale > 0, isStacked: true }
+        : null
+    // Eine Zeile nur mit Litern und Preis: lieber gestapelt mit allem als einzeilig mit Lücke.
+    const withTap = APP_STEPS.filter(step => step.scale > 0)
+    const without = APP_STEPS.filter(step => step.scale === 0)
+    const isWhole = (step: AppStep) => step.withLiters && step.withMoney
+    // Winzig steht er nur gestapelt: in einer Zeile wäre er neben dem Text zu klein.
+    const plans = [
+      ...withTap.filter(step => isWhole(step) && step.scale >= APP_SMALL).map(inRow),
+      ...withTap.filter(step => step.scale < APP_LARGE).map(stacked),
+      ...withTap.filter(step => !isWhole(step) && step.scale >= APP_SMALL).map(inRow),
+      ...without.map(inRow),
+      ...without.map(stacked),
     ]
 
-    // Die Apps, desktop und vscode gleich und nur nach der Breite, in einer Zeile:
-    // erst kürzen sich die Details, dann wird Clawd kleiner (2-fach, 1,5-fach, im schmalen Panel 1-fach),
-    // dann geht der Preis, erst dann die Liter. Die Liter bleiben also, solange es geht: das
-    // Seitenpanel von VS Code ist selten breiter als 100 Zeichen. Passt nicht alles in die Zeile,
-    // rückt der Zähler mit ihm unter die Limits; erst wenn selbst das nicht passt, tritt er
-    // beiseite. Jede Stufe passt auch bei jeder größeren Breite, und es gilt die erste, die
-    // passt: so zeigt ein breiteres Fenster Clawd nie kleiner als ein schmaleres.
-    // Das Terminal rechnet weiter wie unten.
-    type AppPlan = {
-      detail: string | undefined
-      hasTap: boolean
-      // 0 ohne Clawd, sonst seine Größe zum viewBox
-      scale: number
-      withMoney: boolean
-      withLiters: boolean
-      isStacked: boolean
-    }
-    const APP_STEPS = [
-      { scale: APP_LARGE, withMoney: true, withLiters: true },
-      { scale: APP_SMALL, withMoney: true, withLiters: true },
-      { scale: APP_SMALL, withMoney: false, withLiters: true },
-      { scale: APP_SMALL, withMoney: true, withLiters: false },
-      { scale: APP_SMALL, withMoney: false, withLiters: false },
-      ...APP_TINY_SCALES.flatMap(scale => [
-        { scale, withMoney: true, withLiters: true },
-        { scale, withMoney: false, withLiters: true },
-        { scale, withMoney: true, withLiters: false },
-        { scale, withMoney: false, withLiters: false },
-      ]),
-      { scale: 0, withMoney: true, withLiters: false },
-      { scale: 0, withMoney: false, withLiters: false },
-    ] as const
-    type AppStep = (typeof APP_STEPS)[number]
-    const appRoom = e.props.bodyColumns - 1 - APP_SLACK
-    const appLive = (step: AppStep) =>
-      appText((step.scale > 0 ? 3 : 2) + liveRoomOf(step.withMoney) + (step.withLiters ? LITER_WIDTH : 0)) +
-      (step.scale === 0
-        ? 0
-        : isTextApp
-          ? appCells(PIXEL_GRID.cols * pixelSize(step.scale).width * APP_CH_PX)
-          : appCells(appScene(step.scale).width))
-    const appPlan = (left: (detail: string | undefined) => number, details: string[]): AppPlan => {
-      const options = [...details, undefined]
-      const inRow = (step: AppStep): AppPlan | null => {
-        const at = options.findIndex(d => left(d) + appLive(step) <= appRoom)
-
-        return at < 0 ? null : { detail: options[at], ...step, hasTap: step.scale > 0, isStacked: false }
+    return (
+      plans.find(plan => plan !== null) ?? {
+        detail: options.find(d => left(d) <= appRoom),
+        hasTap: false,
+        scale: 0,
+        withMoney: false,
+        withLiters: false,
+        isStacked: true,
       }
-      // Gestapelt steht Clawd klein, damit die Leiste flach bleibt; im ganz schmalen Panel
-      // winzig, statt zu gehen (VS Code ist oft so schmal).
-      // Die Liter stehen gestapelt über dem Zähler neben Clawd und kosten keine Breite.
-      const stacked = (step: AppStep): AppPlan | null =>
-        appLive({ ...step, withLiters: step.withLiters && step.scale === 0 }) <= appRoom
-          ? { detail: options.find(d => left(d) <= appRoom), ...step, hasTap: step.scale > 0, isStacked: true }
-          : null
-      // Eine Zeile nur mit Litern und Preis: lieber gestapelt mit allem als einzeilig mit Lücke.
-      const withTap = APP_STEPS.filter(step => step.scale > 0)
-      const without = APP_STEPS.filter(step => step.scale === 0)
-      const isWhole = (step: AppStep) => step.withLiters && step.withMoney
-      // Winzig steht er nur gestapelt: in einer Zeile wäre er neben dem Text zu klein.
-      const plans = [
-        ...withTap.filter(step => isWhole(step) && step.scale >= APP_SMALL).map(inRow),
-        ...withTap.filter(step => step.scale < APP_LARGE).map(stacked),
-        ...withTap.filter(step => !isWhole(step) && step.scale >= APP_SMALL).map(inRow),
-        ...without.map(inRow),
-        ...without.map(stacked),
-      ]
-
-      return (
-        plans.find(plan => plan !== null) ?? {
-          detail: options.find(d => left(d) <= appRoom),
-          hasTap: false,
-          scale: 0,
-          withMoney: false,
-          withLiters: false,
-          isStacked: true,
-        }
-      )
-    }
-    // Rechts der Zähler als Text; nur der Zeitraum ist der Knopf, denn die Apps zeichnen
-    // jeden Button als ihren eigenen Knopf. Farben stehen außerhalb davon (siehe unten).
-    // Der Text kürzt sein Ende, statt umzubrechen (die festen Leerzeichen ließen ihn sonst
-    // über den Rand laufen); schrumpfen darf er nicht, das tun erst die Details links.
-    const appCounter = (withMoney: boolean) => [
-      <Text size="footnote" tabular wrap="truncate-end">
-        {liveMoney !== '' && withMoney && <Text color="claude">{liveMoney}</Text>}
-        {liveMoney !== '' && withMoney && <Text dimColor>{nb(' · ')}</Text>}
-        {liveArrow !== '' && <Text dimColor>{nb(liveArrow)}</Text>}
-        <Text color="claude">{liveValue}</Text>
-        <Text dimColor>{nb(' tokens · ')}</Text>
-      </Text>,
-      <Button
-        key="live"
-        plain
-        dimColor
-        label={nb(`${span.label} ›`)}
-        onPress={async () => {
-          await update($, liveSpan, i => (i + 1) % SPANS.length)
-          await publish($, true)
-        }}
-      >
-        <Text size="footnote">{nb(`${span.label} ›`)}</Text>
-      </Button>,
-    ]
-    // Eine ruhige Zeile: links die Limits, rechts Clawd (höher als der Text), Liter, Zähler;
-    // alles mittig, so steht der Text auf halber Höhe neben ihm. Rechts schrumpft nichts:
-    // Clawd würde gestaucht, der Zähler zerrissen. Liegt die Schätzung daneben, gibt die
-    // Lücke nach, dann kürzen sich links die Details; was dann noch übersteht,
-    // schneidet die Zeile am Rand ab, statt darüber hinaus zu zeichnen.
-    // VS Code bricht Zeilen-Boxen sonst um (flex-wrap: wrap); die Leiste bleibt eine Zeile.
-    const oneLine = isTextApp ? { flexWrap: 'nowrap' as const } : {}
-    const appRight = (plan: AppPlan) =>
-      plan.isStacked && plan.hasTap && plan.withLiters ? appStackedRight(plan) : appRowRight(plan)
-    // Gestapelt mit Clawd: rechts neben ihm die Liter über dem Zähler, beide rechtsbündig.
-    const appStackedRight = (plan: AppPlan) => [
-      <Box flexGrow={1} />,
-      <Box flexDirection="row" alignItems="center" flexShrink={0} {...oneLine}>
-        {tapPart(plan.scale)}
-      </Box>,
-      <Text>{nb('  ')}</Text>,
-      <Box flexDirection="column" alignItems="flex-end" flexShrink={0}>
-        {literPart}
-        <Box flexDirection="row" alignItems="center" flexShrink={0} {...oneLine}>
-          {appCounter(plan.withMoney)}
-        </Box>
-      </Box>,
-    ]
-    const appRowRight = (plan: AppPlan) => [
-      <Box flexGrow={1} />,
-      plan.hasTap && (
-        <Box flexDirection="row" alignItems="center" flexShrink={0} {...oneLine}>
-          {tapPart(plan.scale)}
-          {plan.withLiters && literPart}
-        </Box>
-      ),
-      <Text>{nb(plan.hasTap ? '  ' : '   ')}</Text>,
-      // Text und Knopf gemeinsam mittig: VS Code setzt Knöpfe sonst oben an (flex-start).
+    )
+  }
+  // Rechts der Zähler als Text; nur der Zeitraum ist der Knopf, denn die Apps zeichnen
+  // jeden Button als ihren eigenen Knopf. Farben stehen außerhalb davon (siehe unten).
+  // Der Text kürzt sein Ende, statt umzubrechen (die festen Leerzeichen ließen ihn sonst
+  // über den Rand laufen); schrumpfen darf er nicht, das tun erst die Details links.
+  const appCounter = (withMoney: boolean) => [
+    <Text size="footnote" tabular wrap="truncate-end">
+      {liveMoney !== '' && withMoney && <Text color="claude">{liveMoney}</Text>}
+      {liveMoney !== '' && withMoney && <Text dimColor>{nb(' · ')}</Text>}
+      {liveArrow !== '' && <Text dimColor>{nb(liveArrow)}</Text>}
+      <Text color="claude">{liveValue}</Text>
+      <Text dimColor>{nb(' tokens · ')}</Text>
+    </Text>,
+    <Button
+      key="live"
+      plain
+      dimColor
+      label={nb(`${span.label} ›`)}
+      onPress={async () => {
+        await update($, liveSpan, i => (i + 1) % SPANS.length)
+        await publish($, true)
+      }}
+    >
+      <Text size="footnote">{nb(`${span.label} ›`)}</Text>
+    </Button>,
+  ]
+  // Eine ruhige Zeile: links die Limits, rechts Clawd (höher als der Text), Liter, Zähler;
+  // alles mittig, so steht der Text auf halber Höhe neben ihm. Rechts schrumpft nichts:
+  // Clawd würde gestaucht, der Zähler zerrissen. Liegt die Schätzung daneben, gibt die
+  // Lücke nach, dann kürzen sich links die Details; was dann noch übersteht,
+  // schneidet die Zeile am Rand ab, statt darüber hinaus zu zeichnen.
+  // VS Code bricht Zeilen-Boxen sonst um (flex-wrap: wrap); die Leiste bleibt eine Zeile.
+  const oneLine = isTextApp ? { flexWrap: 'nowrap' as const } : {}
+  const appRight = (plan: AppPlan) =>
+    plan.isStacked && plan.hasTap && plan.withLiters ? appStackedRight(plan) : appRowRight(plan)
+  // Gestapelt mit Clawd: rechts neben ihm die Liter über dem Zähler, beide rechtsbündig.
+  const appStackedRight = (plan: AppPlan) => [
+    <Box flexGrow={1} />,
+    <Box flexDirection="row" alignItems="center" flexShrink={0} {...oneLine}>
+      {tapPart(plan.scale)}
+    </Box>,
+    <Text>{nb('  ')}</Text>,
+    <Box flexDirection="column" alignItems="flex-end" flexShrink={0}>
+      {literPart}
       <Box flexDirection="row" alignItems="center" flexShrink={0} {...oneLine}>
         {appCounter(plan.withMoney)}
-      </Box>,
-    ]
-    const appBand = (plan: AppPlan, left: ReturnType<typeof h>) =>
-      plan.isStacked ? (
-        <Box flexDirection="column" overflow="hidden">
-          {left}
-          <Box flexDirection="row" alignItems="center" overflow="hidden" {...oneLine}>
-            {appRight(plan)}
-          </Box>
-        </Box>
-      ) : (
+      </Box>
+    </Box>,
+  ]
+  const appRowRight = (plan: AppPlan) => [
+    <Box flexGrow={1} />,
+    plan.hasTap && (
+      <Box flexDirection="row" alignItems="center" flexShrink={0} {...oneLine}>
+        {tapPart(plan.scale)}
+        {plan.withLiters && literPart}
+      </Box>
+    ),
+    <Text>{nb(plan.hasTap ? '  ' : '   ')}</Text>,
+    // Text und Knopf gemeinsam mittig: VS Code setzt Knöpfe sonst oben an (flex-start).
+    <Box flexDirection="row" alignItems="center" flexShrink={0} {...oneLine}>
+      {appCounter(plan.withMoney)}
+    </Box>,
+  ]
+  const appBand = (plan: AppPlan, left: ReturnType<typeof h>) =>
+    plan.isStacked ? (
+      <Box flexDirection="column" overflow="hidden">
+        {left}
         <Box flexDirection="row" alignItems="center" overflow="hidden" {...oneLine}>
-          {left}
           {appRight(plan)}
         </Box>
+      </Box>
+    ) : (
+      <Box flexDirection="row" alignItems="center" overflow="hidden" {...oneLine}>
+        {left}
+        {appRight(plan)}
+      </Box>
+    )
+
+  const current = await read($, reading)
+  if (current === null && !isTerminal) {
+    // Kürzer, ehe Clawd oder eine Zahl gehen muss.
+    const waiting = ["Usage limits appear after Claude's next reply", 'Limits after the next reply']
+    const plan = appPlan(text => appText(MARK.length + (text?.length ?? 0)), waiting)
+
+    return appBand(
+      plan,
+      // minWidth 0: sonst hielte der Text links seine volle Breite, statt sein Ende zu kürzen.
+      <Box flexDirection="row" alignItems="center" flexShrink={1} minWidth={0} {...oneLine}>
+        <Text size="footnote" wrap="truncate-end">
+          <Text color="claude">{nb(MARK)}</Text>
+          <Text dimColor>{nb(plan.detail ?? '')}</Text>
+        </Text>
+      </Box>,
+    )
+  }
+  if (current === null) {
+    return withUnder(
+      canTap,
+      <Box flexDirection="row" alignItems="center">
+        <Text mono size={isTerminal ? undefined : 'footnote'} wrap="truncate-end">
+          <Text color="claude">{nb(MARK)}</Text>
+          <Text dimColor>{nb("Usage limits appear after Claude's next reply")}</Text>
+        </Text>
+        {livePart(canTap)}
+      </Box>,
+    )
+  }
+
+  const list = views(current, await read($, tokens), nowMs, await read($, context))
+  const index = (await read($, view)) % list.length
+  const shown = list[index]
+  if (shown === undefined) return next(e)
+
+  const label = `${shown.label}  `
+  const amount = shown.amount === '' ? '' : ` ${shown.amount}`
+  const separator = shown.amount === '' ? '' : '  ·  '
+  const position = list.length > 1 ? `${index + 1}/${list.length} ›` : ''
+  const gap = position === '' ? '' : '   '
+  const barCells = shown.percent === null ? 0 : BAR_WIDTH
+  const fixed =
+    MARK.length + label.length + barCells + amount.length + separator.length + gap.length +
+    position.length + 2 + STATS_BUTTON.length
+  const room = e.props.bodyColumns - 5 - liveRoom
+  const termDetail = shown.details.find(text => fixed + text.length <= room)
+  const hasTermTap = canTap && shown.details.find(text => fixed + text.length <= room - tapRoom) === termDetail
+  // In den Apps steht der Balken als Svg in px da, der Trenner nur mit einem Detail.
+  const plan = isTerminal
+    ? null
+    : appPlan(
+        text =>
+          appText(fixed - barCells - (text === undefined ? separator.length : 0) + (text?.length ?? 0)) +
+          (shown.percent === null ? 0 : Svg !== undefined ? appCells(APP_BAR.width) : appCells(BAR_WIDTH * APP_CH_PX)),
+        shown.details,
       )
+  const detail = plan === null ? termDetail : plan.detail
+  const hasTap = plan === null ? hasTermTap : plan.hasTap
+  const filled =
+    shown.percent === null
+      ? 0
+      : Math.round((Math.min(100, Math.max(0, shown.percent)) / 100) * BAR_WIDTH)
+  const color = shown.percent === null || shown.isStale ? undefined : barColor(shown.percent)
+  const tail = nb(detail === undefined ? '' : `${separator}${detail}`)
+  const colors = !isTerminal && (await read($, isLight)) ? PALETTE.light : PALETTE.dark
 
-    const current = await read($, reading)
-    if (current === null && !isTerminal) {
-      // Kürzer, ehe Clawd oder eine Zahl gehen muss.
-      const waiting = ["Usage limits appear after Claude's next reply", 'Limits after the next reply']
-      const plan = appPlan(text => appText(MARK.length + (text?.length ?? 0)), waiting)
-
-      return appBand(
-        plan,
-        // minWidth 0: sonst hielte der Text links seine volle Breite, statt sein Ende zu kürzen.
-        <Box flexDirection="row" alignItems="center" flexShrink={1} minWidth={0} {...oneLine}>
-          <Text size="footnote" wrap="truncate-end">
-            <Text color="claude">{nb(MARK)}</Text>
-            <Text dimColor>{nb(plan.detail ?? '')}</Text>
-          </Text>
-        </Box>,
-      )
-    }
-    if (current === null) {
-      return withUnder(
-        canTap,
-        <Box flexDirection="row" alignItems="center">
-          <Text mono size={isTerminal ? undefined : 'footnote'} wrap="truncate-end">
-            <Text color="claude">{nb(MARK)}</Text>
-            <Text dimColor>{nb("Usage limits appear after Claude's next reply")}</Text>
-          </Text>
-          {livePart(canTap)}
-        </Box>,
-      )
-    }
-
-    const list = views(current, await read($, tokens), nowMs, await read($, context))
-    const index = (await read($, view)) % list.length
-    const shown = list[index]
-    if (shown === undefined) return next(e)
-
-    const label = `${shown.label}  `
-    const amount = shown.amount === '' ? '' : ` ${shown.amount}`
-    const separator = shown.amount === '' ? '' : '  ·  '
-    const position = list.length > 1 ? `${index + 1}/${list.length} ›` : ''
-    const gap = position === '' ? '' : '   '
-    const barCells = shown.percent === null ? 0 : BAR_WIDTH
-    const fixed =
-      MARK.length + label.length + barCells + amount.length + separator.length + gap.length +
-      position.length + 2 + STATS_BUTTON.length
-    const room = e.props.bodyColumns - 5 - liveRoom
-    const termDetail = shown.details.find(text => fixed + text.length <= room)
-    const hasTermTap = canTap && shown.details.find(text => fixed + text.length <= room - tapRoom) === termDetail
-    // In den Apps steht der Balken als Svg in px da, der Trenner nur mit einem Detail.
-    const plan = isTerminal
-      ? null
-      : appPlan(
-          text =>
-            appText(fixed - barCells - (text === undefined ? separator.length : 0) + (text?.length ?? 0)) +
-            (shown.percent === null ? 0 : Svg !== undefined ? appCells(APP_BAR.width) : appCells(BAR_WIDTH * APP_CH_PX)),
-          shown.details,
-        )
-    const detail = plan === null ? termDetail : plan.detail
-    const hasTap = plan === null ? hasTermTap : plan.hasTap
-    const filled =
-      shown.percent === null
-        ? 0
-        : Math.round((Math.min(100, Math.max(0, shown.percent)) / 100) * BAR_WIDTH)
-    const color = shown.percent === null || shown.isStale ? undefined : barColor(shown.percent)
-    const tail = nb(detail === undefined ? '' : `${separator}${detail}`)
-    const colors = !isTerminal && (await read($, isLight)) ? PALETTE.light : PALETTE.dark
-
-    // Farben stehen außerhalb der Buttons: die Desktop-App übermalt deren Inhalt.
-    const controls = [
-      position !== '' && (
-        <Button
-          key="burn"
-          plain
-          dimColor
-          autoFocus
-          label={nb(position)}
-          onPress={() => void update($, view, i => (i + 1) % list.length)}
-        >
-          <Text size="footnote">{nb(position)}</Text>
-        </Button>
-      ),
-      <Text>{nb('  ')}</Text>,
+  // Farben stehen außerhalb der Buttons: die Desktop-App übermalt deren Inhalt.
+  const controls = [
+    position !== '' && (
       <Button
-        key="statistik"
+        key="burn"
         plain
         dimColor
-        label={STATS_BUTTON}
-        onPress={() => void $.ui.open({ id: PANE, title: PANE_TITLE, closeOnEscape: true })}
+        autoFocus
+        label={nb(position)}
+        onPress={() => void update($, view, i => (i + 1) % list.length)}
       >
-        <Text size="footnote">{STATS_BUTTON}</Text>
-      </Button>,
-    ]
-    const limits = isTerminal ? (
-      <Text mono>
+        <Text size="footnote">{nb(position)}</Text>
+      </Button>
+    ),
+    <Text>{nb('  ')}</Text>,
+    <Button
+      key="statistik"
+      plain
+      dimColor
+      label={STATS_BUTTON}
+      onPress={() => void $.ui.open({ id: PANE, title: PANE_TITLE, closeOnEscape: true })}
+    >
+      <Text size="footnote">{STATS_BUTTON}</Text>
+    </Button>,
+  ]
+  const limits = isTerminal ? (
+    <Text mono>
+      <Text color="claude">{nb(MARK)}</Text>
+      <Text>{nb(label)}</Text>
+      <Text color={color} dimColor={color === undefined}>
+        {'█'.repeat(filled)}
+      </Text>
+      <Text color={color ?? 'suggestion'} dimColor>
+        {shown.percent === null ? '' : '█'.repeat(BAR_WIDTH - filled)}
+      </Text>
+      <Text>{nb(amount)}</Text>
+      <Text dimColor>{tail}</Text>
+      <Text>{nb(gap)}</Text>
+    </Text>
+  ) : (
+    // Schrumpft als Erstes, wenn die Schätzung zu knapp war; minWidth 0, sonst hielte jeder
+    // Text seine volle Breite, und das Kürzen unten griffe nie.
+    <Box flexDirection="row" alignItems="center" flexShrink={1} minWidth={0} {...oneLine}>
+      <Text size="footnote" wrap="truncate-end">
         <Text color="claude">{nb(MARK)}</Text>
         <Text>{nb(label)}</Text>
-        <Text color={color} dimColor={color === undefined}>
-          {'█'.repeat(filled)}
-        </Text>
-        <Text color={color ?? 'suggestion'} dimColor>
-          {shown.percent === null ? '' : '█'.repeat(BAR_WIDTH - filled)}
-        </Text>
+      </Text>
+      {shown.percent !== null &&
+        (Svg !== undefined ? (
+          // Ein schmaler Strich statt einer ganzen Zeile: hält die Leiste flach.
+          <Svg
+            alt={`${Math.round(shown.percent)}% used`}
+            width={APP_BAR.width}
+            height={APP_BAR.height}
+            source={appBar(shown.percent, shown.isStale, colors)}
+          />
+        ) : (
+          // In VS Code flach wie der Svg-Strich: 0,3 Zeilen hoch statt einer ganzen.
+          <Box flexDirection="row" width={BAR_WIDTH} height={isTextApp ? 0.3 : 1} flexShrink={0} {...oneLine}>
+            {filled > 0 && <Box width={filled} height={isTextApp ? 0.3 : 1} backgroundColor={color ?? 'inactive'} />}
+            {filled < BAR_WIDTH && (
+              <Box width={BAR_WIDTH - filled} height={isTextApp ? 0.3 : 1} backgroundColor="subtle" />
+            )}
+          </Box>
+        ))}
+      {/* Liegt die Schätzung daneben, kürzt das Detail sein Ende, statt umzubrechen. */}
+      <Text size="footnote" tabular wrap="truncate-end">
         <Text>{nb(amount)}</Text>
         <Text dimColor>{tail}</Text>
         <Text>{nb(gap)}</Text>
       </Text>
-    ) : (
-      // Schrumpft als Erstes, wenn die Schätzung zu knapp war; minWidth 0, sonst hielte jeder
-      // Text seine volle Breite, und das Kürzen unten griffe nie.
+    </Box>
+  )
+
+  // Die Knöpfe kürzen sich nie: ein halber Knopf wäre keiner. Es kürzen sich die Limits davor.
+  if (plan !== null) {
+    return appBand(
+      plan,
       <Box flexDirection="row" alignItems="center" flexShrink={1} minWidth={0} {...oneLine}>
-        <Text size="footnote" wrap="truncate-end">
-          <Text color="claude">{nb(MARK)}</Text>
-          <Text>{nb(label)}</Text>
-        </Text>
-        {shown.percent !== null &&
-          (Svg !== undefined ? (
-            // Ein schmaler Strich statt einer ganzen Zeile: hält die Leiste flach.
-            <Svg
-              alt={`${Math.round(shown.percent)}% used`}
-              width={APP_BAR.width}
-              height={APP_BAR.height}
-              source={appBar(shown.percent, shown.isStale, colors)}
-            />
-          ) : (
-            // In VS Code flach wie der Svg-Strich: 0,3 Zeilen hoch statt einer ganzen.
-            <Box flexDirection="row" width={BAR_WIDTH} height={isTextApp ? 0.3 : 1} flexShrink={0} {...oneLine}>
-              {filled > 0 && <Box width={filled} height={isTextApp ? 0.3 : 1} backgroundColor={color ?? 'inactive'} />}
-              {filled < BAR_WIDTH && (
-                <Box width={BAR_WIDTH - filled} height={isTextApp ? 0.3 : 1} backgroundColor="subtle" />
-              )}
-            </Box>
-          ))}
-        {/* Liegt die Schätzung daneben, kürzt das Detail sein Ende, statt umzubrechen. */}
-        <Text size="footnote" tabular wrap="truncate-end">
-          <Text>{nb(amount)}</Text>
-          <Text dimColor>{tail}</Text>
-          <Text>{nb(gap)}</Text>
-        </Text>
-      </Box>
-    )
-
-    // Die Knöpfe kürzen sich nie: ein halber Knopf wäre keiner. Es kürzen sich die Limits davor.
-    if (plan !== null) {
-      return appBand(
-        plan,
-        <Box flexDirection="row" alignItems="center" flexShrink={1} minWidth={0} {...oneLine}>
-          {limits}
-          <Box flexDirection="row" alignItems="center" flexShrink={0} {...oneLine}>
-            {controls}
-          </Box>
-        </Box>,
-      )
-    }
-
-    return withUnder(
-      hasTap,
-      <Box flexDirection="row" alignItems="center">
         {limits}
-        {controls}
-        {livePart(hasTap)}
+        <Box flexDirection="row" alignItems="center" flexShrink={0} {...oneLine}>
+          {controls}
+        </Box>
       </Box>,
     )
-  })
+  }
+
+  return withUnder(
+    hasTap,
+    <Box flexDirection="row" alignItems="center">
+      {limits}
+      {controls}
+      {livePart(hasTap)}
+    </Box>,
+  )
 }

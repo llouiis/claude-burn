@@ -382,7 +382,6 @@ const INK = {
   fish: '#9DB8C9',
   sole: '#5E5550',
 }
-const GROUND = 27.5
 const px = (x: number, y: number, w: number, h: number, c: string, extra = '') =>
   `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="${c}"${extra}/>`
 const crisp = (inner: string) => `<g shape-rendering="crispEdges">${inner}</g>`
@@ -514,8 +513,10 @@ const carryingOf = (step: number): Shape[] => [
 ]
 // Abgestellt: der Laptop liegt aufgeklappt links neben ihm, wie am Wasserspender.
 const PUT_DOWN = DESK_FRAMES[12] ?? FRONT
-// Clawd steht unter der Brause etwas weiter links als am Wasserspender, damit rechts das Rohr Platz hat.
-const showerClawd = shifted(14, 10)
+// Clawd steht unter der Brause etwas weiter links als am Wasserspender, damit rechts das Rohr Platz
+// hat, und zwei Einheiten tiefer, ganz unten in der Wanne: so bleibt bis zum Brausekopf viel Luft.
+const SHOWER_FLOOR = 28.5
+const showerClawd = shifted(14, 12)
 function showerShapes(scene: Scene): Shape[] {
   const { arrival } = scene
   if (arrival >= 0) return showerClawd(arrival < ARRIVE.in ? carryingOf(arrival) : PUT_DOWN)
@@ -607,36 +608,36 @@ function coolerSvg(scene: Scene, colors: SceneColors): { back: string; front: st
 // Dusche: hinten das Rohr mit rotem Drehknopf, oben der Brausekopf über Clawd, unten die
 // Duschwanne. Das Wasser prasselt auf seinen Kopf und rinnt an ihm herab; er tippt weiter.
 // Der Dampf wird mit der Sitzung dichter, bis Clawd fast verschwindet.
-// Der Brausekopf hängt ganz oben am Rand (y 3 bis 4,8), mittig über Clawd; bis zu seinem Kopf
-// (y 10, beim Tippen y 12) fällt das Wasser ein gutes Stück frei.
-const BRAUSE = { left: 14, right: 28, top: 3, y: 4.8 }
+// Der Brausekopf hängt ganz oben am Rand (y 3 bis 4,2), mittig über Clawd; bis zu seinem Kopf
+// (y 12, beim Tippen y 14) fällt das Wasser weit frei, in VS Code vier Kästchen.
+const BRAUSE = { left: 13, right: 29, top: 3, y: 4.2, slant: 3 }
 const BRAUSE_MID = (BRAUSE.left + BRAUSE.right) / 2
 const PIPE = { x: 38, width: 1.6 }
-const KNOB = { x: PIPE.x + 0.8, y: 16, r: 1.3 }
+const KNOB = { x: PIPE.x + 0.8, y: 18, r: 1.3 }
 // Wo das Wasser auf ihn trifft (Kopf von der Seite, x 12 bis 28) und an ihm herabrinnt.
-const HEAD_Y = 12
+const HEAD_Y = 14
 const STREAMS = [16, 19, 22, 25]
 // In den Box-Pixeln je Strahl eine Spalte mit einer frei dazwischen, sonst verschwimmen sie.
 const STREAM_CELLS = [17, 21, 25]
 const RIVULETS = [11.5, 28.5]
 const DRIPS = [18, 24]
 const pipeShapes = (isLight: boolean): Shape[] => [
-  [PIPE.x, 3, PIPE.width, GROUND - 3, INK.concrete],
+  [PIPE.x, 3, PIPE.width, SHOWER_FLOOR - 3, INK.concrete],
   [BRAUSE_MID, 3, PIPE.x + PIPE.width - BRAUSE_MID, 1.2, INK.concreteTop],
-  [0.5, GROUND - 1, PIPE.x + PIPE.width + 1.5, 1, isLight ? INK.concrete : TOWEL],
+  [0.5, SHOWER_FLOOR, PIPE.x + PIPE.width + 1.5, 1, isLight ? INK.concrete : TOWEL],
 ]
 function showerBackSvg(colors: SceneColors): string {
   return (
     crisp(pxOf(pipeShapes(colors.isLight === true))) +
-    `<path d="M${BRAUSE.left} ${BRAUSE.y} L${BRAUSE.right} ${BRAUSE.y} L${BRAUSE.right - 1.5} ${BRAUSE.top} L${BRAUSE.left + 1.5} ${BRAUSE.top} Z" fill="${INK.concreteTop}"/>` +
+    `<path d="M${BRAUSE.left} ${BRAUSE.y} L${BRAUSE.right} ${BRAUSE.y} L${BRAUSE.right - BRAUSE.slant} ${BRAUSE.top} L${BRAUSE.left + BRAUSE.slant} ${BRAUSE.top} Z" fill="${INK.concreteTop}"/>` +
     `<circle cx="${KNOB.x}" cy="${KNOB.y}" r="${KNOB.r}" fill="${INK.red}"/>`
   )
 }
-// Die Dampfschwaden ziehen um Clawd herum; sein Gesicht (x 12 bis 32, y 10 bis 18) bleibt frei.
-const STEAM_PUFFS: [number, number, number][] = [[3, 24, 3], [33, 22, 3.5], [2, 8, 2.6], [37, 8, 3], [18, 27, 3], [1, 16, 2.4], [42, 14, 4], [28, 26, 3], [16, 3, 2.5], [44, 5, 4]]
+// Die Dampfschwaden ziehen um Clawd herum; sein Gesicht (x 12 bis 32, y 12 bis 20) bleibt frei.
+const STEAM_PUFFS: [number, number, number][] = [[3, 25, 3], [35, 24, 3.5], [2, 8, 2.6], [37, 8, 3], [8, 29, 2.5], [1, 16, 2.4], [42, 14, 4], [34, 28, 2.5], [16, 3, 2.5], [44, 5, 4]]
 // Die Tropfen in drei Höhen zwischen Brause und Kopf; bei starkem Strahl spritzt es vom Kopf.
-const dripY = (drop: number) => BRAUSE.y + 1.5 + drop * 2.3
-const SPRAY: [number, number][] = [[13, 10.5], [29, 10], [11, 11.5]]
+const dripY = (drop: number) => BRAUSE.y + 1.5 + drop * 3.3
+const SPRAY: [number, number][] = [[13, 12.5], [29, 12], [11, 13.5]]
 function showerSvg(scene: Scene, colors: SceneColors, isHere: boolean): string {
   const { water, strength, tick, level } = scene
   const wet = `fill="${colors.suggestion}"`
@@ -652,7 +653,7 @@ function showerSvg(scene: Scene, colors: SceneColors, isHere: boolean): string {
       const width = strength === 3 ? 0.8 : 0.5
       rain = STREAMS.map(x => `<path d="M${x} ${BRAUSE.y} L${x} ${HEAD_Y - 0.5}" stroke="${colors.suggestion}" stroke-width="${width}" stroke-dasharray="2.2 0.8" stroke-dashoffset="${-(tick % 3) * 1}"/>`).join('')
       // Es prasselt auf seinen Kopf und rinnt an beiden Seiten herab bis in die Duschwanne.
-      rain += RIVULETS.map(x => `<path d="M${x} ${HEAD_Y} L${x} ${GROUND - 1}" stroke="${colors.suggestion}" stroke-opacity="0.7" stroke-width="${width}" stroke-dasharray="1.6 1" stroke-dashoffset="${-(tick % 3) * 0.8}"/>`)
+      rain += RIVULETS.map(x => `<path d="M${x} ${HEAD_Y} L${x} ${SHOWER_FLOOR}" stroke="${colors.suggestion}" stroke-opacity="0.7" stroke-width="${width}" stroke-dasharray="1.6 1" stroke-dashoffset="${-(tick % 3) * 0.8}"/>`)
         .join('')
       if (strength === 3) rain += SPRAY.map(([x, y]) => `<circle cx="${x}" cy="${(y ?? 0) - (tick % 2) * 0.6}" r="0.45" ${wet}/>`).join('')
     } else if (water.isSplash) {
@@ -863,7 +864,7 @@ export function scenePixels(scene: Scene, colors: SceneColors): Pixels {
         for (const x of DRIPS.filter((_, i) => i % 2 === tick % 2)) p.rect(x - 1, dripY(water.drop) - 1, 2, 2, wet, 3)
       } else if (water.jet > 0) {
         for (let y = 6; y < HEAD_Y; y += 2) if ((y / 2 + tick) % 3 !== 0) for (const x of STREAM_CELLS) p.rect(x - 1, y, 2, 2, wet, 3)
-        for (let y = HEAD_Y; y < GROUND - 1; y += 2) if ((y / 2 + tick) % 3 !== 0) for (const x of RIVULETS) p.rect(x - 0.6, y, 1.2, 2, wet, 2)
+        for (let y = HEAD_Y; y < SHOWER_FLOOR; y += 2) if ((y / 2 + tick) % 3 !== 0) for (const x of RIVULETS) p.rect(x - 0.6, y, 1.2, 2, wet, 2)
       }
     }
   }

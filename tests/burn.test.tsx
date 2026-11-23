@@ -875,9 +875,10 @@ test('while Claude works Clawd types: the arms take turns and the screen glows',
   for (const role of ROLES) {
     const working = (tick: number) => sceneSvg({ role, water: FLOWS[2]?.[tick] ?? null, strength: 2, tick, level: 1, arrival: -1 }, colors)
     if (role === 'shower') {
-      expect(working(0)).toContain('<rect x="2" y="11" width="4" height="4"')
-      expect(working(1)).toContain('<rect x="30" y="11" width="4" height="4"')
-      expect(working(0)).toContain('<rect x="10" y="15.6" width="16" height="0.8" fill="#9FD8FF"')
+      // Unter der Dusche derselbe Clawd von der Seite, zwei Einheiten weiter links, der Laptop am Boden.
+      expect(working(0)).toContain('<rect x="8" y="18" width="4" height="4" fill="#D97757"')
+      expect(working(1)).toContain('<rect x="8" y="22" width="4" height="3" fill="#B5583C"')
+      expect(working(0)).toContain('<rect x="5" y="24" width="6" height="1" fill="#A9A7A0"')
     }
     // Ruht er, hängen beide Ärmchen und das Display ist dunkel.
     const resting = sceneSvg({ role, water: null, strength: 0, tick: 0, level: 1, arrival: -1, idle: 0 }, colors)
@@ -908,16 +909,24 @@ test('the water in the hose is as thick as the liters per second, and the jug em
 
 test('the steam leaves Clawds face free, arrivals fade in at the edge', () => {
   const colors = { suggestion: '#B1B9F9', gray: '#B0AEA5' }
-  // Gesicht: x 8 bis 28, y 8 bis 16; kein Dampfkreis reicht hinein.
+  // Gesicht: x 12 bis 32, y 10 bis 18 (von vorn und von der Seite); kein Dampfkreis reicht hinein.
   for (const tick of [0, 1]) {
     const shower = sceneSvg({ role: 'shower', water: FLOWS[3]?.[0] ?? null, strength: 3, tick, level: 10, arrival: -1 }, colors)
     const puffs = [...shower.matchAll(/<circle cx="([\d.]+)" cy="([\d.]+)" r="([\d.]+)" fill="#FFFFFF"/g)].map(m => m.slice(1).map(Number))
     expect(puffs.length).toBe(10)
     for (const [x = 0, y = 0, r = 0] of puffs) {
-      const dx = Math.max(8 - x, 0, x - 28)
-      const dy = Math.max(8 - y, 0, y - 16)
+      const dx = Math.max(12 - x, 0, x - 32)
+      const dy = Math.max(10 - y, 0, y - 18)
       expect({ x, y, free: dx * dx + dy * dy >= r * r }).toEqual({ x, y, free: true })
     }
+  }
+  // Der Brausekopf hängt ganz oben, ein gutes Stück über Clawds Kopf, ob er steht oder tippt.
+  for (const water of [null, FLOWS[2]?.[0] ?? null]) {
+    const shower = sceneSvg({ role: 'shower', water, strength: water === null ? 0 : 2, tick: 0, level: 0, arrival: -1 }, colors)
+    const brause = Number(/<path d="M[\d.]+ ([\d.]+) L[\d.]+ [\d.]+ L[\d.]+ 3 /.exec(shower)?.[1])
+    const head = Math.min(...[...shower.matchAll(/<rect x="[\d.]+" y="([\d.]+)" [^>]*fill="#D97757"/g)].map(m => Number(m[1])))
+    expect(brause).toBeLessThanOrEqual(5)
+    expect(head - brause).toBeGreaterThanOrEqual(5)
   }
   // Er macht es sich nicht mehr bequem: auch bei vielen Litern steht er am Laptop.
   const busy = sceneSvg({ role: 'tap', water: null, strength: 0, tick: 0, level: 4, arrival: -1 }, colors)
@@ -1294,7 +1303,7 @@ test('in the endless shower Clawd types while the water runs, and the steam thic
   await ui.unmount()
 
   const steamy = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  expect((await svgOf(steamy))?.props.alt).toBe('Clawd with his laptop under the shower in thick steam')
+  expect((await svgOf(steamy))?.props.alt).toBe('Clawd standing under the shower in thick steam')
   // Keine Duschhaube mehr: er sieht aus wie im Logo.
   expect(String((await svgOf(steamy))?.props.source)).not.toContain('#F2A7C3')
   await steamy.unmount()
